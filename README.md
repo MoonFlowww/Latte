@@ -62,9 +62,9 @@ void ProcessOrder() {
 The framework supports up to 16 active overlapping slots per thread, allowing for granular analysis of nested function calls.
 ```cpp
 Latte::Fast::Start("Frame_Total");
-    Latte::Mid::Start("Physics_Engine");
-    // Core logic execution
-    Latte::Mid::Stop("Physics_Engine");
+Latte::Mid::Start("Physics_Engine");
+// Core logic execution
+Latte::Mid::Stop("Physics_Engine");
 Latte::Fast::Stop("Frame_Total");
 ```
 
