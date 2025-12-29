@@ -1,7 +1,3 @@
-#ifndef SANDBOX_LATTE_HPP
-#define SANDBOX_LATTE_HPP
-#pragma once
-
 #include <iostream>
 #include <vector>
 #include <string>
@@ -60,11 +56,6 @@ namespace Latte {
         std::mutex mutex;
         std::vector<ThreadStorage*> thread_buffers;
         double cycles_per_ns = 1.0;
-
-        // Self-profiling results (in nanoseconds)
-        double fast_overhead_ns = 0;
-        double mid_overhead_ns = 0;
-        double hard_overhead_ns = 0;
 
         static Manager& Get() { static Manager instance; return instance; }
 
@@ -147,12 +138,10 @@ namespace Latte {
         Manager& mgr = Manager::Get();
         std::map<ID, std::vector<double>> global_data;
 
-
         { // Collect data from all threads
             std::lock_guard<std::mutex> lock(mgr.mutex);
             for (auto* ts : mgr.thread_buffers) {
                 for (auto& [id, buffer] : ts->history) {
-                    if (std::string(id) == "__internal_null_ping") continue;
                     for (size_t i = 0; i < buffer.count; ++i) {
                         global_data[id].push_back(buffer.data[i] / mgr.cycles_per_ns);
                     }
@@ -160,30 +149,8 @@ namespace Latte {
             }
         }
 
-        // Refresh Overhead Calculation
-        auto measure_overhead = [&](auto start_func, auto stop_func) {
-            const int iterations = 1000;
-            Cycles total = 0;
-            ID test_id = "__internal_null_ping";
-            for(int i = 0; i < iterations; ++i) {
-                Cycles s = Intrinsic::RDTSC();
-                start_func(test_id);
-                stop_func(test_id);
-                Cycles e = Intrinsic::RDTSC();
-                total += (e - s);
-            }
-            return (double)(total / iterations) / mgr.cycles_per_ns;
-        };
-        mgr.fast_overhead_ns = measure_overhead(Fast::Start, Fast::Stop);
-	    mgr.mid_overhead_ns = measure_overhead(Mid::Start, Mid::Stop);
-	    mgr.hard_overhead_ns = measure_overhead(Hard::Start, Hard::Stop);
-
-
         oss << std::string(140, '=') << "\n";
-        oss << "LATTE TELEMETRY REPORT | Tax:\n";
-	    oss << " - Fast(RDTSC): " << mgr.fast_overhead_ns << "ns\n";
-	    oss << " - Mid (RDTSCP): " << mgr.mid_overhead_ns << "ns\n";
-	    oss << " - Hard(RDTSCP+LFENCE): " << mgr.hard_overhead_ns << "ns\n";
+        oss << "LATTE TELEMETRY REPORT\n";
         oss << std::string(140, '=') << "\n";
 
         oss << std::left << std::setw(25) << "COMPONENT NAME" << std::right
@@ -200,15 +167,12 @@ namespace Latte {
             size_t n = times.size();
             std::sort(times.begin(), times.end());
 
-            // Average
             double sum = 0;
             for(double t : times) sum += t;
             double avg = sum / n;
 
-            // Median
             double median = (n % 2 == 0) ? (times[n/2 - 1] + times[n/2]) / 2.0 : times[n/2];
 
-            // Std Dev & Skewness
             double variance_sum = 0;
             double skew_sum = 0;
             for(double t : times) {
@@ -219,7 +183,7 @@ namespace Latte {
 
             double std_dev = std::sqrt(variance_sum / n);
             double skew = 0;
-            if (n > 1 && std_dev > 0) { // Fisher-Pearson coefficient of skewness
+            if (n > 1 && std_dev > 0) { 
                 skew = (skew_sum / n) / (std_dev * std_dev * std_dev);
             }
 
@@ -234,4 +198,3 @@ namespace Latte {
         oss << std::string(140, '=') << std::endl;
     }
 }
-#endif //SANDBOX_LATTE_HPP
