@@ -63,7 +63,7 @@ The framework supports up to 16 active overlapping slots per thread, allowing fo
 ```cpp
 Latte::Fast::Start("Frame_Total");
     Latte::Mid::Start("Physics_Engine");
-    UpdatePhysics();
+    // Core logic execution
     Latte::Mid::Stop("Physics_Engine");
 Latte::Fast::Stop("Frame_Total");
 ```
