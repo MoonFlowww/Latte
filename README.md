@@ -1,5 +1,4 @@
 # Latte: Ultra-Low Latency C++ Telemetry Framework
-
 Latte is a header-only, zero-allocation C++ telemetry library designed for high-frequency trading, game engines, and real-time systems where measurement overhead must be measured in nanoseconds rather than microseconds.
 
 ---
@@ -23,8 +22,6 @@ Latte provides three levels of precision by wrapping x86 assembly intrinsics dir
 * **Mid (RDTSCP):** Partially serializing; prevents the CPU from reordering instructions after the timestamp is taken.
 * **Hard (LFENCE + RDTSCP):** Fully serializing; forces the CPU to retire all pending instructions before the timer starts.
 
-
-
 ---
 
 ## Statistical Analysis
@@ -35,7 +32,6 @@ Latte provides comprehensive insights into the distribution of latency, specific
 * **Standard Deviation:** Measures the stability and jitter of the component.
 * **Skewness:** Indicates the asymmetry of the performance distribution; a high positive skew identifies components prone to infrequent but massive delays.
 * **Intrinsic Tax:** Latte auto-calibrates at runtime to report the framework's own overhead for each timing mode (Fast, Mid, and Hard), allowing for more accurate net latency calculations.
-
 
 
 ---
@@ -57,7 +53,7 @@ void ProcessOrder() {
     Latte::Fast::Start("Order_Logic");
     
     // Core logic execution
-    
+
     Latte::Fast::Stop("Order_Logic");
 }
 ```
