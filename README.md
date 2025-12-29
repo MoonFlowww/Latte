@@ -102,9 +102,9 @@ Measurements were computed using **batch and trial averaging**:
 
 Each function’s latency was measured in **CPU cycles** using a high-accuracy timer and batched calls, with initial warm-ups to stabilize branch predictors and caches. Results are rendered in a GitHub-flavored Markdown table. :contentReference[oaicite:0]{index=0}
 
-> **Note on cycle time → real time:**  
+> **Note on cycle time -> real time:**  
 > For example:
-> - On a **3.5 GHz** core (≈ 3.5 billion cycles per second), **1 cycle ≈ 0.285 ns**.  
+> - On a **3.5 GHz** core (≈ 3.5 billion cycles/sec), **1 cycle ≈ 0.285 ns**.  
 > - On a **4.0 GHz** core, **1 cycle ≈ 0.25 ns**.  
 > - On a **5.0 GHz** core (common in high-end servers/quant trading infrastructure), **1 cycle ≈ 0.20 ns**.  
 >  
