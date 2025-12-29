@@ -85,6 +85,6 @@ int main() {
 * Memory Footprint: The framework reserves space for 100,000 samples per identifier per thread by default. This is configurable via the `MAX_SAMPLES` constant.
 ---
 ## Performance Summary
-By leveraging pointer-comparison and thread-local buffers, Latte achieves a measurement "tax" of approximately `PLACEHOLDER`ns on modern hardware. This enables the high-resolution profiling of functions that execute in under 100ns while maintaining production stability through circular buffer memory management.
+By leveraging pointer-comparison and thread-local buffers, Latte achieves a measurement "tax" of approximately `PLACEHOLDER`ns on modern hardware. This enables the high-resolution profiling of functions that execute in under ) while maintaining production stability through circular buffer memory management.
 
 
