@@ -86,7 +86,7 @@ int main() {
 ---
 ## ☕️ Latency Report
 
-| Function             | Avg (cycles) | Median (cycles) | StdDev (cycles) | Min (cycles) | Max (cycles) | Δ Min–Max (cycles) |
+| Function             | Avg (cycles) | Median (cycles) | StdDev (cycles) | Min (cycles) | Max (cycles) | Δ Min-Max (cycles) |
 |----------------------|--------------:|----------------:|-----------------:|-------------:|-------------:|-------------------:|
 | `Latte::Fast::Start` |         31.35 |            30.22 |             1.69 |        30.21 |        33.96 |              3.75 |
 | `Latte::Fast::Stop`  |         30.39 |            30.33 |             0.27 |        30.21 |        31.74 |              1.53 |
