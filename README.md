@@ -59,7 +59,7 @@ void ProcessOrder() {
 ```
 
 ### 3. Nested Monitoring
-The framework supports up to 16 active overlapping slots per thread, allowing for granular analysis of nested function calls.
+The framework supports up to 32 active overlapping slots per thread, allowing for granular analysis of nested function calls.
 ```cpp
 Latte::Fast::Start("Frame_Total");
 Latte::Mid::Start("Physics_Engine");
