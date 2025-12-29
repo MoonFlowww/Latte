@@ -88,23 +88,25 @@ int main() {
 
 | Function             | Avg (cycles) | Median (cycles) | StdDev (cycles) | Min (cycles) | Max (cycles) | Δ Min–Max (cycles) |
 |----------------------|--------------:|----------------:|-----------------:|-------------:|-------------:|-------------------:|
-| `Latte::Fast::Start` |         32.09 |            32.02 |             0.30 |        31.92 |        33.86 |              1.94 |
-| `Latte::Fast::Stop`  |         95.17 |            94.78 |             0.70 |        94.50 |        96.98 |              2.48 |
-| `Latte::Mid::Start`  |         68.57 |            68.29 |             0.98 |        68.19 |        74.50 |              6.31 |
-| `Latte::Mid::Stop`   |        118.76 |           118.55 |             0.94 |       117.53 |       123.76 |              6.23 |
-| `Latte::Hard::Start` |         85.57 |            85.49 |             0.19 |        85.44 |        86.23 |              0.79 |
-| `Latte::Hard::Stop`  |        136.24 |           136.15 |             0.47 |       135.50 |       137.01 |              1.51 |
+| `Latte::Fast::Start` |         31.35 |            30.22 |             1.69 |        30.21 |        33.96 |              3.75 |
+| `Latte::Fast::Stop`  |         30.39 |            30.33 |             0.27 |        30.21 |        31.74 |              1.53 |
+| `Latte::Mid::Start`  |         57.87 |            57.85 |             0.07 |        57.83 |        58.17 |              0.34 |
+| `Latte::Mid::Stop`   |         61.33 |            61.30 |             0.09 |        61.28 |        61.75 |              0.47 |
+| `Latte::Hard::Start` |         73.38 |            73.37 |             0.06 |        73.36 |        73.73 |              0.37 |
+| `Latte::Hard::Stop`  |         76.00 |            75.96 |             0.09 |        75.95 |        76.54 |              0.59 |
 
-Measurements were computed using **batch and trial averaging**:
+Measurements were computed using:
 - **batch size:** 5 000 000 iterations per trial  
-- **trials:** 50 independent measurements  
+- **trials:** 50 independent measurements
 - **warm-up iterations:** 3 full passes of batch before timing
+- **optimization:** g++ -O3
+- **processor:** AMD Ryzen 5 7600X 6-Core 4.7 GHz (Boost Clock: 5.3 GHz)
 
-Each function’s latency was measured in **CPU cycles** using a high-accuracy timer and batched calls, with initial warm-ups to stabilize branch predictors and caches. Results are rendered in a GitHub-flavored Markdown table. :contentReference[oaicite:0]{index=0}
+Each function’s latency was measured in **CPU cycles** using a high-accuracy timer and batched calls, with initial warm-ups to stabilize branch predictors and caches.
 > For example:
-> - On a **3.5 GHz** core (≈ 3.5 billion cycles/sec), **1 cycle ≈ 0.285 ns**.  
-> - On a **4.0 GHz** core, **1 cycle ≈ 0.25 ns**.  
-> - On a **5.0 GHz** core (common in high-end servers/quant trading infrastructure), **1 cycle ≈ 0.20 ns**.  
+> - On a **3.5 GHz** core (≈ 3.5 billion cycles/sec), **1 cycle ≈ 0.286 ns**.  
+> - On a **4.0 GHz** core, **1 cycle ≈ 0.250 ns**.  
+> - On a **4.7 GHz** core, **1 cycle ≈ 0.213 ns**.  
 >  
 > These conversions come from the fact that clock rate (in hertz) is the number of cycles per second:  
 > `time per cycle = 1 / frequency` (in seconds).
