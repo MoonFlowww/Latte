@@ -95,17 +95,19 @@ int main() {
 | `Latte::Hard::Start` |         85.57 |            85.49 |             0.19 |        85.44 |        86.23 |              0.79 |
 | `Latte::Hard::Stop`  |        136.24 |           136.15 |             0.47 |       135.50 |       137.01 |              1.51 |
 
-**Legend**
-- **Avg**: Arithmetic mean of cycles per call across all trials.  
-- **Median**: Middle value in sorted trial results (resistant to outliers).  
-- **StdDev**: Standard deviation across trials (spread of measurements).  
-- **Min/Max**: Lowest and highest measured cycles per call.  
-- **Δ Min–Max**: Difference between Min and Max, showing observed variability.
-
-> Measurements used the following settings:  
-> `constexpr int TRIALS = 50;`  
-> `constexpr int BATCH = 5 000 000;`  
-> `constexpr int WARMUPS = 3;`  
+Measurements were computed using **batch and trial averaging**:
+- **batch size:** 5 000 000 iterations per trial  
+- **trials:** 50 independent measurements  
+- **warm-up iterations:** 3 full passes of batch before timing
 
 Each function’s latency was measured in **CPU cycles** using a high-accuracy timer and batched calls, with initial warm-ups to stabilize branch predictors and caches. Results are rendered in a GitHub-flavored Markdown table. :contentReference[oaicite:0]{index=0}
+
+> **Note on cycle time → real time:**  
+> For example:
+> - On a **3.5 GHz** core (≈ 3.5 billion cycles per second), **1 cycle ≈ 0.285 ns**.  
+> - On a **4.0 GHz** core, **1 cycle ≈ 0.25 ns**.  
+> - On a **5.0 GHz** core (common in high-end servers/quant trading infrastructure), **1 cycle ≈ 0.20 ns**.  
+>  
+> These conversions come from the fact that clock rate (in hertz) is the number of cycles per second:  
+> `time per cycle = 1 / frequency` (in seconds).
 
