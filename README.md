@@ -50,11 +50,11 @@ Use string literals directly as identifiers. No pre-registration is required.
 
 ```cpp
 void ProcessOrder() {
-    Latte::Fast::Start("Order_Logic");
+    Latte::Fast::Start(__func__);
     
     // Core logic execution here
 
-    Latte::Fast::Stop("Order_Logic");
+    Latte::Fast::Stop(__func__);
 }
 ```
 
