@@ -84,7 +84,28 @@ int main() {
 * ID Persistence: Users must use string literals or static `const char*` pointers. Temporary buffers or dynamic strings will result in inconsistent IDs due to shifting memory addresses.
 * Memory Footprint: The framework reserves space for 100,000 samples per identifier per thread by default. This is configurable via the `MAX_SAMPLES` constant.
 ---
-## Performance Summary
-By leveraging pointer-comparison and thread-local buffers, Latte achieves a measurement "tax" of approximately `PLACEHOLDER`ns on modern hardware. This enables the high-resolution profiling of functions that execute in under ) while maintaining production stability through circular buffer memory management.
+## ☕️ Latte Framework Latency Report
 
+| Function             | Avg (cycles) | Median (cycles) | StdDev (cycles) | Min (cycles) | Max (cycles) | Δ Min–Max (cycles) |
+|----------------------|--------------:|----------------:|-----------------:|-------------:|-------------:|-------------------:|
+| `Latte::Fast::Start` |         32.09 |            32.02 |             0.30 |        31.92 |        33.86 |              1.94 |
+| `Latte::Fast::Stop`  |         95.17 |            94.78 |             0.70 |        94.50 |        96.98 |              2.48 |
+| `Latte::Mid::Start`  |         68.57 |            68.29 |             0.98 |        68.19 |        74.50 |              6.31 |
+| `Latte::Mid::Stop`   |        118.76 |           118.55 |             0.94 |       117.53 |       123.76 |              6.23 |
+| `Latte::Hard::Start` |         85.57 |            85.49 |             0.19 |        85.44 |        86.23 |              0.79 |
+| `Latte::Hard::Stop`  |        136.24 |           136.15 |             0.47 |       135.50 |       137.01 |              1.51 |
+
+**Legend**
+- **Avg**: Arithmetic mean of cycles per call across all trials.  
+- **Median**: Middle value in sorted trial results (resistant to outliers).  
+- **StdDev**: Standard deviation across trials (spread of measurements).  
+- **Min/Max**: Lowest and highest measured cycles per call.  
+- **Δ Min–Max**: Difference between Min and Max, showing observed variability.
+
+> Measurements used the following settings:  
+> `constexpr int TRIALS = 50;`  
+> `constexpr int BATCH = 5 000 000;`  
+> `constexpr int WARMUPS = 3;`  
+
+Each function’s latency was measured in **CPU cycles** using a high-accuracy timer and batched calls, with initial warm-ups to stabilize branch predictors and caches. Results are rendered in a GitHub-flavored Markdown table. :contentReference[oaicite:0]{index=0}
 
