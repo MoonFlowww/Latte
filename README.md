@@ -1,4 +1,4 @@
-# Latte: Ultra-Low Latency C++ Telemetry Framework
+# ☕️ Latte: Ultra-Low Latency C++ Telemetry Framework
 Latte is a header-only, zero-allocation C++ telemetry library designed for high-frequency trading, game engines, and real-time systems where measurement overhead must be measured in nanoseconds rather than microseconds.
 
 ---
