@@ -52,7 +52,7 @@ Use string literals directly as identifiers. No pre-registration is required.
 void ProcessOrder() {
     Latte::Fast::Start("Order_Logic");
     
-    // Core logic execution
+    // Core logic execution here
 
     Latte::Fast::Stop("Order_Logic");
 }
