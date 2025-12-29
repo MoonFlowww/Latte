@@ -96,11 +96,11 @@ int main() {
 | `Latte::Hard::Stop`  |         76.00 |            75.96 |             0.09 |        75.95 |        76.54 |              0.59 |
 
 Measurements were computed using:
-- **batch size:** 5 000 000 iterations per trial  
-- **trials:** 50 independent measurements
-- **warm-up iterations:** 3 full passes of batch before timing
-- **optimization:** g++ -O3
-- **processor:** AMD Ryzen 5 7600X 6-Core 4.7 GHz (Boost Clock: 5.3 GHz)
+- **Batch size:** 5 000 000 iterations per trial  
+- **Trials:** 50 independent measurements
+- **Warm-up iterations:** 3 full passes of batch before timing
+- **Optimization:** g++ -O3
+- **Processor:** AMD Ryzen 5 7600X 6-Core 4.7 GHz (Boost Clock: 5.3 GHz)
 
 Each function’s latency was measured in **CPU cycles** using a high-accuracy timer and batched calls, with initial warm-ups to stabilize branch predictors and caches.
 > For example:
