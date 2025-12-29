@@ -1,3 +1,5 @@
+#ifndef SANDBOX_LATTE_HPP
+#define SANDBOX_LATTE_HPP
 #pragma once
 
 #include <iostream>
@@ -22,10 +24,10 @@
 
 namespace Latte {
     // --- Tuning Constants ---
-    constexpr size_t MAX_ACTIVE_SLOTS = 16;   
-    constexpr size_t MAX_SAMPLES = 100000;    
+    constexpr size_t MAX_ACTIVE_SLOTS = 32;
+    constexpr size_t MAX_SAMPLES = 100000;
 
-    using ID = const char*; 
+    using ID = const char*;
     using Cycles = uint64_t;
 
     struct Intrinsic {
@@ -58,7 +60,7 @@ namespace Latte {
         std::mutex mutex;
         std::vector<ThreadStorage*> thread_buffers;
         double cycles_per_ns = 1.0;
-        
+
         // Self-profiling results (in nanoseconds)
         double fast_overhead_ns = 0;
         double mid_overhead_ns = 0;
@@ -66,8 +68,8 @@ namespace Latte {
 
         static Manager& Get() { static Manager instance; return instance; }
 
-        Manager() { 
-            Calibrate(); 
+        Manager() {
+            Calibrate();
         }
 
         void Calibrate() {
@@ -124,11 +126,11 @@ namespace Latte {
         inline void Start(ID id) { Recorder<Intrinsic::RDTSC>::Start(id); }
         inline void Stop(ID id) { Recorder<Intrinsic::RDTSC>::Stop(id); }
     }
-    namespace Mid { 
+    namespace Mid {
         inline void Start(ID id) { Recorder<Intrinsic::RDTSCP>::Start(id); }
         inline void Stop(ID id) { Recorder<Intrinsic::RDTSCP>::Stop(id); }
     }
-    namespace Hard { 
+    namespace Hard {
         inline void Start(ID id) { Recorder<Intrinsic::RDTSCP_LFENCE>::Start(id); }
         inline void Stop(ID id) { Recorder<Intrinsic::RDTSCP_LFENCE>::Stop(id); }
     }
@@ -183,11 +185,11 @@ namespace Latte {
 	    oss << " - Mid (RDTSCP): " << mgr.mid_overhead_ns << "ns\n";
 	    oss << " - Hard(RDTSCP+LFENCE): " << mgr.hard_overhead_ns << "ns\n";
         oss << std::string(140, '=') << "\n";
-        
-        oss << std::left << std::setw(25) << "COMPONENT NAME" << std::right 
-            << std::setw(8) << "SAMPLES" 
-            << std::setw(12) << "AVG" 
-            << std::setw(12) << "MEDIAN" 
+
+        oss << std::left << std::setw(25) << "COMPONENT NAME" << std::right
+            << std::setw(8) << "SAMPLES"
+            << std::setw(12) << "AVG"
+            << std::setw(12) << "MEDIAN"
             << std::setw(12) << "STD"
             << std::setw(10) << "SKEW"
             << std::setw(12) << "P99" << "\n";
@@ -214,21 +216,22 @@ namespace Latte {
                 variance_sum += diff * diff;
                 skew_sum += diff * diff * diff;
             }
-            
+
             double std_dev = std::sqrt(variance_sum / n);
             double skew = 0;
             if (n > 1 && std_dev > 0) { // Fisher-Pearson coefficient of skewness
                 skew = (skew_sum / n) / (std_dev * std_dev * std_dev);
             }
 
-            oss << std::left << std::setw(25) << id << std::right 
-                << std::setw(8) << n 
-                << std::setw(12) << FormatTime(avg) 
-                << std::setw(12) << FormatTime(median) 
-                << std::setw(12) << FormatTime(std_dev) 
+            oss << std::left << std::setw(25) << id << std::right
+                << std::setw(8) << n
+                << std::setw(12) << FormatTime(avg)
+                << std::setw(12) << FormatTime(median)
+                << std::setw(12) << FormatTime(std_dev)
                 << std::setw(10) << std::fixed << std::setprecision(2) << skew
                 << std::setw(12) << FormatTime(times[(size_t)(n * 0.99)]) << "\n";
         }
         oss << std::string(140, '=') << std::endl;
     }
 }
+#endif //SANDBOX_LATTE_HPP
