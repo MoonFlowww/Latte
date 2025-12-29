@@ -84,7 +84,7 @@ int main() {
 * ID Persistence: Users must use string literals or static `const char*` pointers. Temporary buffers or dynamic strings will result in inconsistent IDs due to shifting memory addresses.
 * Memory Footprint: The framework reserves space for 100,000 samples per identifier per thread by default. This is configurable via the `MAX_SAMPLES` constant.
 ---
-## ☕️ Latte Framework Latency Report
+## ☕️ Latency Report
 
 | Function             | Avg (cycles) | Median (cycles) | StdDev (cycles) | Min (cycles) | Max (cycles) | Δ Min–Max (cycles) |
 |----------------------|--------------:|----------------:|-----------------:|-------------:|-------------:|-------------------:|
