@@ -100,8 +100,8 @@ Measurements were computed using:
 - **Batch size:** 5 000 000 iterations per trial  
 - **Trials:** 50 independent batch
 - **Warm-up:** 3 independent batch
-- **Optimization:** g++ -O3
 - **Thread:** Pinned
+- **Optimization:** g++ -O3
 - **CPU:** AMD Ryzen 5 7600X 6-Core 4.7 GHz (Boost Clock: 5.3 GHz)
 
 Each function’s latency was measured in **CPU cycles** using a high-accuracy timer and batched calls, with initial warm-ups to stabilize branch predictors and caches.
