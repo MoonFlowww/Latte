@@ -13,26 +13,34 @@ Standard profiling tools often utilize global mutexes or atomic counters that ca
 ### 2. ID-as-a-Pointer (Zero String Hashing)
 Most profilers process string IDs by hashing them at runtime to locate a storage bucket. Latte utilizes `const char*` as the ID. Because string literals occupy fixed memory addresses in the data segment, Latte compares the 64-bit memory address rather than the string content. This reduces ID identification to a single pointer comparison.
 
-### 3. Allocation-Free Hot Path
-Memory allocation is a non-deterministic operation that can trigger operating system kernel transitions. Latte utilizes pre-allocated circular ring buffers. Once the sample limit is reached, the framework overwrites the oldest data, ensuring constant memory pressure regardless of execution duration.
+### 3.Stack-Based O(1) Capturing
+To support deep nesting without linear search overhead, Latte utilizes a Structure of Arrays (SoA) stack.
+* `Start()` pushes the ID and timestamp to the stack index.
+* `Stop()` pops the top of the stack and calculates the cycle delta. This ensures that whether you have 16 or 128 active slots, the latency remains constant and symmetrical.
 
-### 4. Hardware-Level Timing
+### 4. Deferred Aggregation (Zero Map Lookups)
+Unlike standard profilers that update histograms or maps during the measurement, Latte uses a **Two-Phase Recording** strategy:
+* **Hot Path (Capture):** Results are written into a flat, pre-allocated "Raw Log" array. This avoids the pointer-chasing and cache-miss overhead of `std::map` lookups during execution.
+* **Cold Path (Processing):** Data is only aggregated, sorted, and mapped to specific components during the `DumpToStream` phase.
+
+### 5. Cache-Line Alignment & SoA
+To prevent "False Sharing" and maximize CPU pre-fetcher efficiency, internal buffers are aligned to 64-byte boundaries `(alignas(64))`. The use of **Structure of Arrays** instead of Arrays of Structs ensures that only relevant timing data is pulled into the **L1 cache**, preventing unnecessary memory bandwidth usage.
+
+### 6. Hardware-Level Timing
 Latte provides three levels of precision by wrapping x86 assembly intrinsics directly:
-* **Fast (RDTSC):** Lowest overhead. Non-serializing; suitable for general logic.
+* **Fast (RDTSC):** Lowest overhead (~10 cycles). Non-serializing; suitable for general logic.
 * **Mid (RDTSCP):** Partially serializing; prevents the CPU from reordering instructions after the timestamp is taken.
 * **Hard (LFENCE + RDTSCP):** Fully serializing; forces the CPU to retire all pending instructions before the timer starts.
 
 ---
 
 ## Statistical Analysis
-
 Latte provides comprehensive insights into the distribution of latency, specifically focusing on the "long tail" of execution:
 * **Median:** Provides the 50th percentile, filtering out the noise of infrequent spikes to show typical performance.
 * **P99:** Represents the 99th percentile, critical for maintaining service-level agreements (SLAs).
 * **Standard Deviation:** Measures the stability and jitter of the component.
 * **Skewness:** Indicates the asymmetry of the performance distribution; a high positive skew identifies components prone to infrequent but massive delays.
 * **Intrinsic Tax:** Latte auto-calibrates at runtime to report the framework's own overhead for each timing mode (Fast, Mid, and Hard), allowing for more accurate net latency calculations.
-
 
 ---
 
