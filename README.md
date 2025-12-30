@@ -36,11 +36,11 @@ Latte provides three levels of precision by wrapping x86 assembly intrinsics dir
 
 ## Statistical Analysis
 Latte provides comprehensive insights into the distribution of latency, specifically focusing on the "long tail" of execution:
+* **Average:** The value that latency converges to over observations.
 * **Median:** Provides the 50th percentile, filtering out the noise of infrequent spikes to show typical performance.
 * **P99:** Represents the 99th percentile, critical for maintaining service-level agreements (SLAs).
 * **Standard Deviation:** Measures the stability and jitter of the component.
 * **Skewness:** Indicates the asymmetry of the performance distribution; a high positive skew identifies components prone to infrequent but massive delays.
-* **Intrinsic Tax:** Latte auto-calibrates at runtime to report the framework's own overhead for each timing mode (Fast, Mid, and Hard), allowing for more accurate net latency calculations.
 
 ---
 
@@ -67,7 +67,7 @@ void ProcessOrder() {
 ```
 
 ### 3. Nested Monitoring
-The framework supports up to 32 active overlapping slots per thread, allowing for granular analysis of nested function calls.
+The framework supports up to 64 active overlapping slots per thread, allowing for granular analysis of nested function calls.
 ```cpp
 Latte::Fast::Start("Frame_Total");
 Latte::Mid::Start("Physics_Engine");
