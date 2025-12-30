@@ -20,7 +20,7 @@ To support deep nesting without linear search overhead, Latte utilizes a Structu
 
 ### 4. Deferred Aggregation (Zero Map Lookups)
 Unlike standard profilers that update histograms or maps during the measurement, Latte uses a **Two-Phase Recording** strategy:
-* **Hot Path (Capture):** Results are written into a flat, pre-allocated "Raw Log" array. This avoids the pointer-chasing and cache-miss overhead of `std::map` lookups during execution.
+* **Hot Path (Capture):** Results are written into a flat, pre-allocated "Raw Log" array. This avoids the pointer-chasing and cache-miss overhead of `std::map` lookups during execution of `::Start()`.
 * **Cold Path (Processing):** Data is only aggregated, sorted, and mapped to specific components during the `DumpToStream` phase.
 
 ### 5. Cache-Line Alignment & SoA
