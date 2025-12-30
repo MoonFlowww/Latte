@@ -1,3 +1,4 @@
+#pragma GCC optimize ("O3")
 #include <iostream>
 #include <vector>
 #include <string>
@@ -18,11 +19,11 @@
 #include <x86intrin.h>
 #endif
 
+
 namespace Latte {
     // --- Tuning Constants ---
-    constexpr size_t MAX_ACTIVE_SLOTS = 32;
-    constexpr size_t MAX_SAMPLES = 100000;
-
+    constexpr size_t MAX_ACTIVE_SLOTS = 16;
+    constexpr size_t MAX_SAMPLES = 10000;
     using ID = const char*;
     using Cycles = uint64_t;
 
@@ -50,13 +51,11 @@ namespace Latte {
     };
 
     inline ThreadStorage* GetThreadStorage();
-
     class Manager {
     public:
         std::mutex mutex;
         std::vector<ThreadStorage*> thread_buffers;
         double cycles_per_ns = 1.0;
-
         static Manager& Get() { static Manager instance; return instance; }
 
         Manager() {
@@ -100,6 +99,7 @@ namespace Latte {
                 }
             }
         }
+
         static inline void Stop(ID id) {
             Cycles end = TimeFunc();
             ThreadStorage* ts = GetThreadStorage();
@@ -134,6 +134,7 @@ namespace Latte {
         return ss.str();
     }
 
+
     inline void DumpToStream(std::ostream& oss) {
         Manager& mgr = Manager::Get();
         std::map<ID, std::vector<double>> global_data;
@@ -142,13 +143,13 @@ namespace Latte {
             std::lock_guard<std::mutex> lock(mgr.mutex);
             for (auto* ts : mgr.thread_buffers) {
                 for (auto& [id, buffer] : ts->history) {
+                    if (std::string(id) == "__internal_null_ping") continue;
                     for (size_t i = 0; i < buffer.count; ++i) {
                         global_data[id].push_back(buffer.data[i] / mgr.cycles_per_ns);
                     }
                 }
             }
         }
-
         oss << std::string(140, '=') << "\n";
         oss << "LATTE TELEMETRY REPORT\n";
         oss << std::string(140, '=') << "\n";
@@ -167,12 +168,15 @@ namespace Latte {
             size_t n = times.size();
             std::sort(times.begin(), times.end());
 
+            // Average
             double sum = 0;
             for(double t : times) sum += t;
             double avg = sum / n;
 
+            // Median
             double median = (n % 2 == 0) ? (times[n/2 - 1] + times[n/2]) / 2.0 : times[n/2];
 
+            // Std Dev & Skewness
             double variance_sum = 0;
             double skew_sum = 0;
             for(double t : times) {
@@ -180,10 +184,9 @@ namespace Latte {
                 variance_sum += diff * diff;
                 skew_sum += diff * diff * diff;
             }
-
             double std_dev = std::sqrt(variance_sum / n);
             double skew = 0;
-            if (n > 1 && std_dev > 0) { 
+            if (n > 1 && std_dev > 0) { // Fisher-Pearson coefficient of skewness
                 skew = (skew_sum / n) / (std_dev * std_dev * std_dev);
             }
 
@@ -194,7 +197,6 @@ namespace Latte {
                 << std::setw(12) << FormatTime(std_dev)
                 << std::setw(10) << std::fixed << std::setprecision(2) << skew
                 << std::setw(12) << FormatTime(times[(size_t)(n * 0.99)]) << "\n";
-        }
-        oss << std::string(140, '=') << std::endl;
+        } oss << std::string(140, '=') << std::endl;
     }
 }
