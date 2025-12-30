@@ -101,7 +101,7 @@ int main() {
 | `Latte::Mid::Start`  |         9.70  |            9.69 |             0.03 |        9.67 |        9.84 |              0.17 |
 | `Latte::Mid::Stop`   |        62.49  |           62.49 |             0.02 |       62.47 |       62.57 |              0.10 |
 | `Latte::Hard::Start` |         9.80  |            9.74 |             0.20 |        9.68 |       11.01 |              1.33 |
-| `Latte::Hard::Stop`  |        77.88  |           77.46 |             1.68 |       77.11 |       86.72 |              9.61 |
+| `Latte::Hard::Stop`  |        77.14  |           77.01 |             0.24 |       76.83 |       77.67 |              0.84 |
 
 
 Measurements were computed using:
