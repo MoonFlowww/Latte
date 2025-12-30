@@ -86,14 +86,15 @@ int main() {
 ---
 ## ☕️ Latency Report
 
-| Function             | Avg (cycles) | Median (cycles) | StdDev (cycles) | Min (cycles) | Max (cycles) | Δ Min-Max (cycles) |
+| Function             | Avg (cycles)  | Median (cycles) | StdDev (cycles) | Min (cycles) | Max (cycles) | Δ Min-Max (cycles) |
 |----------------------|--------------:|----------------:|-----------------:|-------------:|-------------:|-------------------:|
-| `Latte::Fast::Start` |         31.35 |            30.22 |             1.69 |        30.21 |        33.96 |              3.75 |
-| `Latte::Fast::Stop`  |         30.39 |            30.33 |             0.27 |        30.21 |        31.74 |              1.53 |
-| `Latte::Mid::Start`  |         57.87 |            57.85 |             0.07 |        57.83 |        58.17 |              0.34 |
-| `Latte::Mid::Stop`   |         61.33 |            61.30 |             0.09 |        61.28 |        61.75 |              0.47 |
-| `Latte::Hard::Start` |         73.38 |            73.37 |             0.06 |        73.36 |        73.73 |              0.37 |
-| `Latte::Hard::Stop`  |         76.00 |            75.96 |             0.09 |        75.95 |        76.54 |              0.59 |
+| `Latte::Fast::Start` |         9.74  |            9.68 |             0.20 |        9.63 |       10.93 |              1.30 |
+| `Latte::Fast::Stop`  |        30.54  |           30.53 |             0.05 |       30.49 |       30.78 |              0.29 |
+| `Latte::Mid::Start`  |         9.70  |            9.69 |             0.03 |        9.67 |        9.84 |              0.17 |
+| `Latte::Mid::Stop`   |        62.49  |           62.49 |             0.02 |       62.47 |       62.57 |              0.10 |
+| `Latte::Hard::Start` |         9.80  |            9.74 |             0.20 |        9.68 |       11.01 |              1.33 |
+| `Latte::Hard::Stop`  |        77.88  |           77.46 |             1.68 |       77.11 |       86.72 |              9.61 |
+
 
 Measurements were computed using:
 - **Batch size:** 5 000 000 iterations per trial  
