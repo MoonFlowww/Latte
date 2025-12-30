@@ -97,8 +97,8 @@ int main() {
 
 Measurements were computed using:
 - **Batch size:** 5 000 000 iterations per trial  
-- **Trials:** 50 independent batches
-- **Warm-up:** 3 independent batches
+- **Trials:** 50 independent batch
+- **Warm-up:** 3 independent batch
 - **Optimization:** g++ -O3
 - **Processor:** AMD Ryzen 5 7600X 6-Core 4.7 GHz (Boost Clock: 5.3 GHz)
 
