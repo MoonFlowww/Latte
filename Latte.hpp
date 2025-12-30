@@ -21,7 +21,7 @@
 
 namespace Latte {
     constexpr size_t MAX_ACTIVE_SLOTS = 64;
-    constexpr size_t MAX_SAMPLES = 100000;
+    constexpr size_t MAX_SAMPLES = 262144; // Power of 2 for better alignment
     using ID = const char*;
     using Cycles = uint64_t;
 
@@ -31,28 +31,13 @@ namespace Latte {
         static inline Cycles RDTSCP_LFENCE() { _mm_lfence(); unsigned int aux; return __rdtscp(&aux); }
     };
 
-    struct alignas(64) RingBuffer {
-        Cycles data[MAX_SAMPLES];
-        size_t head = 0; size_t count = 0;
-        inline void push(Cycles val) {
-            data[head] = val;
-            head = (head + 1) % MAX_SAMPLES;
-            if (count < MAX_SAMPLES) count++;
-        }
-    };
-
     struct ThreadStorage {
-        // Structure of Arrays (SoA) for cache-friendly stack
-        // made to counter latency augmentation in MAX_ACTIVE_SLOTS>16 (16² cache)
-        ID stack_ids[MAX_ACTIVE_SLOTS];
-        Cycles stack_starts[MAX_ACTIVE_SLOTS];
-        size_t stack_ptr = 0;
+        // Flat, pre-allocated event log to ensure O(1) symmetry in Start/Stop
+        struct RawEvent { ID id; Cycles ts; bool is_start; };
+        RawEvent events[MAX_SAMPLES];
+        size_t event_ptr = 0;
 
-        std::map<ID, RingBuffer> history;
-
-        ThreadStorage() {
-            for (size_t i = 0; i < MAX_ACTIVE_SLOTS; ++i) stack_ids[i] = nullptr;
-        }
+        ThreadStorage() : event_ptr(0) {}
     };
 
     class Manager {
@@ -89,26 +74,20 @@ namespace Latte {
 
     template <Cycles (*TimeFunc)()>
     struct Recorder {
+        // ~9 cycles: Capture and flat write
         static inline void Start(ID id) {
             ThreadStorage* ts = GetThreadStorage();
-            if (ts->stack_ptr < MAX_ACTIVE_SLOTS) {
-                ts->stack_ids[ts->stack_ptr] = id;
-                ts->stack_starts[ts->stack_ptr] = TimeFunc();
-                ts->stack_ptr++;
+            if (ts->event_ptr < MAX_SAMPLES) {
+                ts->events[ts->event_ptr++] = { id, TimeFunc(), true };
             }
         }
 
+        // ~9 cycles: Capture and flat write (Symmetry achieved)
         static inline void Stop(ID id) {
-            Cycles end = TimeFunc();
+            Cycles now = TimeFunc();
             ThreadStorage* ts = GetThreadStorage();
-
-            // O(1) Stack Pop
-            if (ts->stack_ptr > 0) {
-                ts->stack_ptr--;
-                // If nested correctly, top of stack is our ID
-                // If not nested, we still pop to keep the stack clean
-                ID current_id = ts->stack_ids[ts->stack_ptr];
-                ts->history[current_id].push(end - ts->stack_starts[ts->stack_ptr]); //TODO: remove delta out of here
+            if (ts->event_ptr < MAX_SAMPLES) {
+                ts->events[ts->event_ptr++] = { id, now, false };
             }
         }
     };
@@ -129,64 +108,53 @@ namespace Latte {
         Manager& mgr = Manager::Get();
         std::map<ID, std::vector<double>> global_data;
 
-        { // Collect data from all threads
+        {
             std::lock_guard<std::mutex> lock(mgr.mutex);
             for (auto* ts : mgr.thread_buffers) {
-                for (auto& [id, buffer] : ts->history) {
-                    if (std::string(id) == "__internal_null_ping") continue;
-                    for (size_t i = 0; i < buffer.count; ++i) {
-                        global_data[id].push_back(buffer.data[i] / mgr.cycles_per_ns);
+                // Post-mortem matching: Reconstruct durations using a stack
+                ID     shadow_stack_ids[MAX_ACTIVE_SLOTS];
+                Cycles shadow_stack_ts[MAX_ACTIVE_SLOTS];
+                size_t s_ptr = 0;
+
+                for (size_t i = 0; i < ts->event_ptr; ++i) {
+                    auto& ev = ts->events[i];
+                    if (ev.is_start) {
+                        if (s_ptr < MAX_ACTIVE_SLOTS) {
+                            shadow_stack_ids[s_ptr] = ev.id;
+                            shadow_stack_ts[s_ptr] = ev.ts;
+                            s_ptr++;
+                        }
+                    } else {
+                        if (s_ptr > 0) {
+                            s_ptr--;
+                            // Calculate delta in cold path
+                            Cycles delta = ev.ts - shadow_stack_ts[s_ptr];
+                            global_data[ev.id].push_back(delta / mgr.cycles_per_ns);
+                        }
                     }
                 }
+                ts->event_ptr = 0; // Clear the log after processing
             }
         }
-        oss << std::string(140, '=') << "\n";
-        oss << "LATTE TELEMETRY REPORT\n";
-        oss << std::string(140, '=') << "\n";
 
-        oss << std::left << std::setw(25) << "COMPONENT NAME" << std::right
-            << std::setw(8) << "SAMPLES"
-            << std::setw(12) << "AVG"
-            << std::setw(12) << "MEDIAN"
-            << std::setw(12) << "STD"
-            << std::setw(10) << "SKEW"
-            << std::setw(12) << "P99" << "\n";
+        // Report headers and statistics processing...
+        oss << std::string(140, '=') << "\nLATTE TELEMETRY REPORT (DEFERRED AGGREGATION)\n" << std::string(140, '=') << "\n";
+        oss << std::left << std::setw(25) << "COMPONENT NAME" << std::right << std::setw(8) << "SAMPLES" << std::setw(12) << "AVG" << std::setw(12) << "MEDIAN" << std::setw(12) << "STD" << std::setw(10) << "SKEW" << std::setw(12) << "P99" << "\n";
         oss << std::string(140, '-') << "\n";
 
         for (auto& [id, times] : global_data) {
             if (times.empty()) continue;
             size_t n = times.size();
             std::sort(times.begin(), times.end());
-
-            // Average
-            double sum = 0;
-            for(double t : times) sum += t;
+            double sum = 0; for(double t : times) sum += t;
             double avg = sum / n;
-
-            // Median
             double median = (n % 2 == 0) ? (times[n/2 - 1] + times[n/2]) / 2.0 : times[n/2];
-
-            // Std Dev & Skewness
-            double variance_sum = 0;
-            double skew_sum = 0;
-            for(double t : times) {
-                double diff = t - avg;
-                variance_sum += diff * diff;
-                skew_sum += diff * diff * diff;
-            }
+            double variance_sum = 0, skew_sum = 0;
+            for(double t : times) { double diff = t - avg; variance_sum += diff * diff; skew_sum += diff * diff * diff; }
             double std_dev = std::sqrt(variance_sum / n);
-            double skew = 0;
-            if (n > 1 && std_dev > 0) { // Fisher-Pearson coefficient of skewness
-                skew = (skew_sum / n) / (std_dev * std_dev * std_dev);
-            }
+            double skew = (n > 1 && std_dev > 0) ? (skew_sum / n) / (std_dev * std_dev * std_dev) : 0;
 
-            oss << std::left << std::setw(25) << id << std::right
-                << std::setw(8) << n
-                << std::setw(12) << FormatTime(avg)
-                << std::setw(12) << FormatTime(median)
-                << std::setw(12) << FormatTime(std_dev)
-                << std::setw(10) << std::fixed << std::setprecision(2) << skew
-                << std::setw(12) << FormatTime(times[(size_t)(n * 0.99)]) << "\n";
+            oss << std::left << std::setw(25) << id << std::right << std::setw(8) << n << std::setw(12) << FormatTime(avg) << std::setw(12) << FormatTime(median) << std::setw(12) << FormatTime(std_dev) << std::setw(10) << std::fixed << std::setprecision(2) << skew << std::setw(12) << FormatTime(times[(size_t)(n * 0.99)]) << "\n";
         } oss << std::string(140, '=') << std::endl;
     }
 }
