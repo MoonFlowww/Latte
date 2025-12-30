@@ -108,7 +108,7 @@ namespace Latte {
                 // If nested correctly, top of stack is our ID
                 // If not nested, we still pop to keep the stack clean
                 ID current_id = ts->stack_ids[ts->stack_ptr];
-                ts->history[current_id].push(end - ts->stack_starts[ts->stack_ptr]);
+                ts->history[current_id].push(end - ts->stack_starts[ts->stack_ptr]); //TODO: remove delta out of here
             }
         }
     };
