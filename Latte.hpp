@@ -21,7 +21,7 @@
 
 namespace Latte {
     constexpr size_t MAX_ACTIVE_SLOTS = 64;
-    constexpr size_t MAX_SAMPLES = 131072;
+    constexpr size_t MAX_SAMPLES = 100000;
     using ID = const char*;
     using Cycles = uint64_t;
 
