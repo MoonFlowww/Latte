@@ -41,7 +41,21 @@ Latte provides comprehensive insights into the distribution of latency, specific
 * **P99:** Represents the 99th percentile, critical for maintaining service-level agreements (SLAs).
 * **Standard Deviation:** Measures the stability and jitter of the component.
 * **Skewness:** Indicates the asymmetry of the performance distribution; a high positive skew identifies components prone to infrequent but massive delays.
-
+```ascii
+#=============================================================================================================================#
+| LATTE TELEMETRY [TIME]                                                                                                      |
+#=============================================================================================================================#
+| COMPONENT                   SAMPLES          AVG       MEDIAN      STD DEV      SKEW          MIN          MAX    RANGE (D) |
+|-----------------------------------------------------------------------------------------------------------------------------|
+| NestedLevel                      11    222.14 us    244.34 us     70.24 us     -2.85     10.02 ns    244.56 us    244.55 us |
+| PointerChasing                    1    901.71 ns    901.71 ns      0.00 ns      0.00    901.71 ns    901.71 ns      0.00 ns |
+| LoopIteration                  1000     11.03 ns     10.02 ns      3.02 ns      2.65     10.02 ns     20.04 ns     10.02 ns |
+| Worker_3                       1000     65.60 us     65.14 us     15.25 us     24.52     17.93 us    496.67 us    478.74 us |
+| Worker_2                       1000     65.64 us     65.14 us     15.78 us     24.92     14.47 us    516.61 us    502.14 us |
+| Worker_1                       1000     65.72 us     65.14 us     22.71 us     30.63     17.96 us    776.41 us    758.45 us |
+| Worker_0                       1000     65.74 us     65.13 us     21.69 us     30.33     16.05 us    742.28 us    726.23 us |
+#=============================================================================================================================#
+```
 ---
 
 ## Implementation Guide
