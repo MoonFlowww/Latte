@@ -134,4 +134,3 @@ Each function’s latency was measured in **CPU cycles** using a high-accuracy t
 >  
 > These conversions come from the fact that clock rate (in hertz) is the number of cycles per second:  
 > `time per cycle = 1 / frequency` (in seconds).
-
