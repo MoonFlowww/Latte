@@ -31,9 +31,8 @@ void WorkerThread(int thread_idx) {
     std::snprintf(thread_name, sizeof(thread_name), "Worker_%d", thread_idx); // to avoid binary invented names
 
     for (int i = 0; i < 1000; ++i) {
-        Latte::Mid::Start(thread_name);
         std::this_thread::sleep_for(std::chrono::microseconds(10));
-        Latte::Mid::Stop(thread_name);
+        LATTE_PULSE(thread_name) // function dedicated for loops
     }
 }
 
