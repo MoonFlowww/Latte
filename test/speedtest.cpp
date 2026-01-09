@@ -1,133 +1,176 @@
-#include <x86intrin.h>
-#include <cstdint>
-#include <cstdio>
+#include <iostream>
 #include <vector>
 #include <algorithm>
 #include <numeric>
 #include <cmath>
+#include <iomanip>
 #include <pthread.h>
 #include <unistd.h>
-#include <cstdlib>
 #include <sched.h>
+#include <cstring>
+#include <memory>
 
 #include "Latte.hpp"
 
-static inline uint64_t tsc_begin() {
-    _mm_lfence();
-    uint64_t t = __rdtsc();
-    _mm_lfence();
-    return t;
+template <typename T>
+static inline void do_not_optimize(T const& value) {
+    asm volatile("" : : "r,m"(value));
 }
-
-static inline uint64_t tsc_end() {
-    unsigned aux;
-    uint64_t t = __rdtscp(&aux);
-    _mm_lfence();
-    return t;
-}
-
-struct Stats {
-    double avg;
-    double median;
-    double stddev;
-    double min;
-    double max;
-};
-
-template <typename F>
-Stats measure_func(F fn, int trials, int batch, int warmups) {
-    uint64_t overhead = UINT64_MAX;
-    for (int i = 0; i < 100000; i++) {
-        uint64_t a = tsc_begin();
-        uint64_t b = tsc_end();
-        uint64_t d = b - a;
-        if (d < overhead) overhead = d;
-    }
-
-    for (int w = 0; w < warmups; ++w) {
-        for (int i = 0; i < batch; ++i)
-            fn();
-    }
-
-    std::vector<double> results;
-    results.reserve(trials);
-
-    for (int t = 0; t < trials; t++) {
-        uint64_t start = tsc_begin();
-        for (int i = 0; i < batch; i++) {
-            fn();
-        }
-        uint64_t end = tsc_end();
-
-        double cyc = double((end - start) - overhead) / batch;
-        results.push_back(cyc);
-    }
-
-    std::sort(results.begin(), results.end());
-    double sum = std::accumulate(results.begin(), results.end(), 0.0);
-    double avg = sum / results.size();
-
-    double med;
-    if (results.size() % 2 == 0) {
-        med = 0.5 * (results[results.size()/2 - 1] + results[results.size()/2]);
-    } else {
-        med = results[results.size()/2];
-    }
-
-    double var = 0;
-    for (double x : results) {
-        double diff = x - avg;
-        var += diff * diff;
-    }
-    var /= results.size();
-    double stddev = std::sqrt(var);
-    auto min = std::min_element(results.begin(),results.end());
-    auto max = std::max_element(results.begin(), results.end());
-    return {avg, med, stddev, *min, *max};
-}
-
-int main() {
-    int core_id = 0;
+void PinThread(int core_id) {
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(core_id, &cpuset);
     pthread_t current_thread = pthread_self();
-    int result = pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
-    if (result != 0) {
-        std::cerr << "Error pinning thread" << std::endl;
-        return 1;
+    if (pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset) != 0) {
+        std::cerr << "Warning: Failed to pin thread. Benchmarks may be unstable.\n";
     }
+}
 
-  
-    constexpr int TRIALS = 50;
-    constexpr int BATCH = 5000000;
-    constexpr int WARMUPS = 3;
 
-    auto fFastStart = []() { Latte::Fast::Start("1"); };
-    auto fFastEnd = []() { Latte::Fast::Stop("1"); };
-    auto fMidStart = []() { Latte::Mid::Start("2"); };
-    auto fMidEnd = []() { Latte::Mid::Stop("2"); };
-    auto fHardStart = []() { Latte::Hard::Start("3"); };
-    auto fHardEnd = []() { Latte::Hard::Stop("3"); };
 
-    Stats s;
-    std::cout << "Latte Report: " << std::endl;
-    s = measure_func(fFastStart, TRIALS, BATCH, WARMUPS);
-    printf("\nLatte::Fast::Start: avg=%.2f med=%.2f stddev=%.2f min=%.2f max=%.2f cycles\n", s.avg, s.median, s.stddev, s.min, s.max);
+static __inline__ uint64_t __attribute__((always_inline)) rdtsc_begin() {
+    _mm_lfence();
+    return __rdtsc();
+}
+static __inline__ uint64_t __attribute__((always_inline)) rdtsc_end() {
+    unsigned int aux;
+    uint64_t res = __rdtscp(&aux);
+    _mm_lfence();
+    return res;
+}
 
-    s = measure_func(fFastEnd, TRIALS, BATCH, WARMUPS);
-    printf("Latte::Fast::Stop : avg=%.2f med=%.2f stddev=%.2f min=%.2f max=%.2f cycles\n", s.avg, s.median, s.stddev, s.min, s.max);
 
-    s = measure_func(fMidStart, TRIALS, BATCH, WARMUPS);
-    printf("\nLatte::Mid::Start : avg=%.2f med=%.2f stddev=%.2f min=%.2f max=%.2f cycles\n", s.avg, s.median, s.stddev, s.min, s.max);
 
-    s = measure_func(fMidEnd, TRIALS, BATCH, WARMUPS);
-    printf("Latte::Mid::Stop  : avg=%.2f med=%.2f stddev=%.2f min=%.2f max=%.2f cycles\n", s.avg, s.median, s.stddev, s.min, s.max);
+constexpr int ITERATIONS = 100000;
+constexpr int SAMPLES = 100;
 
-    s = measure_func(fHardStart, TRIALS, BATCH, WARMUPS);
-    printf("\nLatte::Hard::Start: avg=%.2f med=%.2f stddev=%.2f min=%.2f max=%.2f cycles\n", s.avg, s.median, s.stddev, s.min, s.max);
+struct BenchResult {
+    double avg, med, min, max, std_dev;
+    std::string name;
+};
 
-    s = measure_func(fHardEnd, TRIALS, BATCH, WARMUPS);
-    printf("Latte::Hard::Stop : avg=%.2f med=%.2f stddev=%.2f min=%.2f max=%.2f cycles\n", s.avg, s.median, s.stddev, s.min, s.max);
+#define BENCHMARK(NAME, CODE_BLOCK) \
+    ([]() -> std::unique_ptr<BenchResult> { \
+        auto samples_ptr = std::make_unique<double[]>(SAMPLES); \
+        double* samples = samples_ptr.get(); \
+        \
+        /* Warmup: Run without timing to populate I-Cache/D-Cache/TLB */ \
+        /* Volatile loop prevents compiler from removing "useless" code */ \
+        for(volatile int w=0; w < (ITERATIONS); ++w) { CODE_BLOCK } \
+        \
+        uint64_t start, end; /* alloc cold path */\
+        \
+        for(int s=0; s < SAMPLES; ++s) { \
+            start = rdtsc_begin(); \
+            for(int i=0; i < ITERATIONS; ++i) { \
+                CODE_BLOCK \
+            } \
+            end = rdtsc_end(); \
+            \
+            /* delta after end beacon */ \
+            samples[s] = (double)(end - start) / ITERATIONS; \
+        } \
+        \
+        /* Statistics*/ \
+        std::sort(samples, samples + SAMPLES); \
+        double sum = 0.0; \
+        for(int i=0; i<SAMPLES; ++i) sum += samples[i]; \
+        \
+        double avg = sum / SAMPLES; \
+        double med = samples[SAMPLES / 2]; \
+        double min = samples[0]; \
+        double max = samples[SAMPLES - 1]; \
+        \
+        double var_sum = 0; \
+        for(int i=0; i<SAMPLES; ++i) \
+            var_sum += (samples[i] - avg) * (samples[i] - avg); \
+        double std_dev = std::sqrt(var_sum / SAMPLES); \
+        \
+        return std::make_unique<BenchResult>(BenchResult{avg, med, min, max, std_dev, NAME}); \
+    })()
+
+void PrintResult(const BenchResult& r, double baseline) {
+    // Pure Latency = Measured - EmptyLoopCost
+    double pure_cost = r.med - baseline;
+    if (pure_cost < 0) pure_cost = 0;
+
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(1);
+    ss << "Range: [" << r.min << " - " << r.max << "]";
+    std::string rangeStr = ss.str();
+    std::cout << "| " << std::left << std::setw(25) << r.name
+              << "| Total: " << std::fixed << std::setprecision(1) << std::setw(6) << r.med
+              << " | Overhead: " << "\033[1;34m" << std::setw(6) << pure_cost << "\033[0m"
+              << " | " << std::left << std::setw(25) << rangeStr << " |" << std::endl;
+}
+
+
+int main() {
+    PinThread(2); // isolated from OS interrupts
+
+    std::cout << "+=========================================================================================+\n";
+    std::cout << "| LATTE LATENCY BENCHMARK (Cycles per Operation)                                          |\n";
+    std::cout << "+=========================================================================================+\n";
+
+    // Measure Baseline (Empty Loop Cost)
+    auto r_baseline = BENCHMARK("Baseline (Empty Loop)", {
+        asm volatile("");
+    });
+
+    // Curiosity
+    auto r_rdtsc = BENCHMARK("__rdtsc", {
+        do_not_optimize(__rdtsc());
+    });
+    auto r_rdtscp = BENCHMARK("__rdtscp", {
+        unsigned int aux;
+        do_not_optimize(__rdtscp(&aux));
+    });
+    auto r_LFENCE = BENCHMARK("_LFENCE", {
+        _mm_lfence();
+    });
+
+    std::cout << "| Loop Overhead detected: \033[1;34m" << r_baseline->med << "\033[0m cycles/iter                                             |\n";
+    std::cout << "+-----------------------------------------------------------------------------------------+\n";
+
+    // Measure Start+Stop PAIRS (::stop() expect values fetched from ::start())
+    auto r_fast = BENCHMARK("Fast::Start + Stop", {
+        Latte::Fast::Start("BenchFast");
+        Latte::Fast::Stop(nullptr);
+    });
+
+    auto r_mid = BENCHMARK("Mid::Start + Stop", {
+        Latte::Mid::Start("BenchMid");
+        Latte::Mid::Stop(nullptr);
+    });
+
+    auto r_hard = BENCHMARK("Hard::Start + Stop", {
+        Latte::Hard::Start("BenchHard");
+        Latte::Hard::Stop(nullptr);
+    });
+
+    // Measure PULSE (The Optimized Loop Method)
+    auto r_pulse = BENCHMARK("LATTE_PULSE (Loop)", {
+        LATTE_PULSE("BenchPulse");
+    });
+
+    // Against std::chrono::now()
+    auto r_chrono = BENCHMARK("std::chrono::now()", {
+         auto t1 = std::chrono::high_resolution_clock::now();
+         auto cd = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - t1).count();
+    });
+
+
+    PrintResult(*r_rdtsc, r_baseline->med);
+    PrintResult(*r_rdtscp, r_baseline->med);
+    PrintResult(*r_LFENCE, r_baseline->med);
+    std::cout << "+-----------------------------------------------------------------------------------------+\n";
+    PrintResult(*r_fast, r_baseline->med);
+    PrintResult(*r_mid, r_baseline->med);
+    PrintResult(*r_hard, r_baseline->med);
+    std::cout << "+-----------------------------------------------------------------------------------------+\n";
+    PrintResult(*r_pulse, r_baseline->med);
+    std::cout << "+-----------------------------------------------------------------------------------------+\n";
+    PrintResult(*r_chrono, r_baseline->med);
+    std::cout << "+=========================================================================================+" << std::endl;
     return 0;
 }
