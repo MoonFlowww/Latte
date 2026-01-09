@@ -110,23 +110,25 @@ int main() {
 ---
 ## ☕️ Latency Report
 
-| Function             | Avg (cycles)  | Median (cycles) | StdDev (cycles) | Min (cycles) | Max (cycles) | Δ Min-Max (cycles) |
-|----------------------|--------------:|----------------:|-----------------:|------------:|-------------:|-------------------:|
-| `std::chrono::now`   |         78.14 |           78.13 |             0.03 |       78.11 |        78.24 |               0.13 |
-|                      |               |                 |                  |             |              |                    |
-| `Latte::Fast::Start` |         9.74  |            9.68 |             0.20 |        9.63 |        10.93 |               1.30 |
-| `Latte::Fast::Stop`  |        30.54  |           30.53 |             0.05 |       30.49 |        30.78 |               0.29 |
-| `Latte::Mid::Start`  |         9.70  |            9.69 |             0.03 |        9.67 |         9.84 |               0.17 |
-| `Latte::Mid::Stop`   |        62.49  |           62.49 |             0.02 |       62.47 |        62.57 |               0.10 |
-| `Latte::Hard::Start` |         9.80  |            9.74 |             0.20 |        9.68 |        11.01 |               1.33 |
-| `Latte::Hard::Stop`  |        77.14  |           77.01 |             0.24 |       76.83 |        77.67 |               0.84 |
-
+| Source    | Function         | Avg (cycles) | Median (cycles) | StdDev (cycles) | Min (cycles) | Max (cycles) | Δ Min-Max (cycles) |
+|:----------|:-----------------|-------------:|----------------:|----------------:|-------------:|-------------:|-------------------:|
+| **ASM**   |                  |              |                 |                 |              |              |                    |
+|           | __rdtsc          | 30.1         | 29.9            | 0.4             | 29.7         | 31.2         | 1.5                |
+|           | __rdtscp         | 57.7         | 57.5            | 0.9             | 57.3         | 62.6         | 5.2                |
+|           | _LFENCE          | 14.7         | 14.7            | 0.1             | 14.7         | 15.3         | 0.6                |
+| **Latte** |                  |              |                 |                 |              |              |                    |
+|           | Fast::Start+Stop | 60.1         | 60.0            | 0.1             | 59.9         | 60.4         | 0.5                |
+|           | Mid::Start+Stop  | 119.8        | 119.7           | 0.4             | 119.9        | 122.7        | 2.8                |
+|           | Hard::Start+Stop | 148.5        | 148.4           | 0.5             | 147.9        | 150.4        | 2.5                |
+|           | LATTE_PULSE      | 29.9         | 29.8            | 0.1             | 29.7         | 30.3         | 0.6                |
+| **Chrono**|                  |              |                 |                 |              |              |                    |
+|           | std::chrono::now | 153.9        | 153.4           | 0.4             | 153.1        | 156.9        | 3.3                |
 
 
 Measurements were computed using:
-- **Batch size:** 5 000 000 iterations per trial  
-- **Trials:** 50 independent batch
-- **Warm-up:** 3 independent batch
+- **Batch size:** 100 000 iterations per trial  
+- **Trials:** 100 independent batch
+- **Warm-up:** 1 independent batch
 - **Thread:** Pinned
 - **Optimization:** g++ -O3
 - **CPU:** AMD Ryzen 5 7600X 6-Core 4.7 GHz (Boost Clock: 5.3 GHz)
