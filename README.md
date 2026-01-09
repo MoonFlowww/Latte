@@ -111,27 +111,26 @@ int main() {
 ## ☕️ Latency Report
 
 ### **ASM**
-| Source    | Function         | Avg (cycles) | Median (cycles) | StdDev (cycles) | Min (cycles) | Max (cycles) | Δ Min-Max (cycles) |
-|:----------|:-----------------|-------------:|----------------:|----------------:|-------------:|-------------:|-------------------:|
-|           | __rdtsc          | 30.1         | 29.9            | 0.4             | 29.7         | 31.2         | 1.5                |
-|           | __rdtscp         | 57.7         | 57.5            | 0.9             | 57.3         | 62.6         | 5.2                |
-|           | _LFENCE          | 14.7         | 14.7            | 0.1             | 14.7         | 15.3         | 0.6                |
+| Function         | Avg (cycles) | Median (cycles) | StdDev (cycles) | Min (cycles) | Max (cycles) | Δ Min-Max (cycles) |
+|:-----------------|-------------:|----------------:|----------------:|-------------:|-------------:|-------------------:|
+| __rdtsc          | 30.1         | 29.9            | 0.4             | 29.7         | 31.2         | 1.5                |
+| __rdtscp         | 57.7         | 57.5            | 0.9             | 57.3         | 62.6         | 5.2                |
+| _LFENCE          | 14.7         | 14.7            | 0.1             | 14.7         | 15.3         | 0.6                |
 
 
 ### **Latte**
-| Source    | Function         | Avg (cycles) | Median (cycles) | StdDev (cycles) | Min (cycles) | Max (cycles) | Δ Min-Max (cycles) |
-|:----------|:-----------------|-------------:|----------------:|----------------:|-------------:|-------------:|-------------------:|
-|           | Fast::Start+Stop | 60.1         | 60.0            | 0.1             | 59.9         | 60.4         | 0.5                |
-|           | Mid::Start+Stop  | 119.8        | 119.7           | 0.4             | 119.9        | 122.7        | 2.8                |
-|           | Hard::Start+Stop | 148.5        | 148.4           | 0.5             | 147.9        | 150.4        | 2.5                |
-|           | LATTE_PULSE      | 29.9         | 29.8            | 0.1             | 29.7         | 30.3         | 0.6                |
-
+| Function         | Avg (cycles) | Median (cycles) | StdDev (cycles) | Min (cycles) | Max (cycles) | Δ Min-Max (cycles) |
+|:-----------------|-------------:|----------------:|----------------:|-------------:|-------------:|-------------------:|
+| Fast::Start+Stop | 60.1         | 60.0            | 0.1             | 59.9         | 60.4         | 0.5                |
+| Mid::Start+Stop  | 119.8        | 119.7           | 0.4             | 119.9        | 122.7        | 2.8                |
+| Hard::Start+Stop | 148.5        | 148.4           | 0.5             | 147.9        | 150.4        | 2.5                |
+| LATTE_PULSE      | 29.9         | 29.8            | 0.1             | 29.7         | 30.3         | 0.6                |
 
 
 ### **Chrono**
-| Source    | Function         | Avg (cycles) | Median (cycles) | StdDev (cycles) | Min (cycles) | Max (cycles) | Δ Min-Max (cycles) |
-|:----------|:-----------------|-------------:|----------------:|----------------:|-------------:|-------------:|-------------------:|
-|           | std::chrono::now | 153.9        | 153.4           | 0.4             | 153.1        | 156.9        | 3.3                |
+| Function         | Avg (cycles) | Median (cycles) | StdDev (cycles) | Min (cycles) | Max (cycles) | Δ Min-Max (cycles) |
+|:-----------------|-------------:|----------------:|----------------:|-------------:|-------------:|-------------------:|
+| std::chrono::now | 153.9        | 153.4           | 0.4             | 153.1        | 156.9        | 3.3                |
 
 
 Measurements were computed using:
