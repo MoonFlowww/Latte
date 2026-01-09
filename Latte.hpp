@@ -1,5 +1,4 @@
 #pragma GCC optimize ("O3")
-#include <iostream>
 #include <vector>
 #include <string>
 #include <map>
@@ -10,8 +9,8 @@
 #include <algorithm>
 #include <iomanip>
 #include <sstream>
-#include <cstring>
 #include <chrono>
+#include <fstream>
 
 #if defined(_MSC_VER)
 #include <intrin.h>
@@ -19,39 +18,55 @@
 #include <x86intrin.h>
 #endif
 
+// It automatically handles the first-run initialization and caching
+#define LATTE_PULSE(id_str) \
+    do { \
+        static thread_local Latte::RingBuffer* _l_rb = nullptr; \
+        static thread_local uint64_t _l_last = 0; \
+        if (__builtin_expect(!_l_rb, 0)) { \
+            _l_rb = Latte::Internal::GetBuffer(id_str); \
+            _l_last = Latte::Intrinsic::RDTSC(); \
+        } else { \
+            uint64_t _l_now = Latte::Intrinsic::RDTSC(); \
+            _l_rb->push(_l_now - _l_last); \
+            _l_last = _l_now; \
+        } \
+    } while(0)
+
 namespace Latte {
-    constexpr size_t MAX_ACTIVE_SLOTS = 64;
-    constexpr size_t MAX_SAMPLES = 100000;
     using ID = const char*;
     using Cycles = uint64_t;
+    constexpr size_t MAX_ACTIVE_SLOTS = 64;
+
+    constexpr size_t BUFFER_PWR = 16;
+    constexpr size_t MAX_SAMPLES = 1 << BUFFER_PWR; // 65536
+    constexpr size_t BUFFER_MASK = MAX_SAMPLES - 1;
 
     struct Intrinsic {
-        static inline Cycles RDTSC() { return __rdtsc(); }
-        static inline Cycles RDTSCP() { unsigned int aux; return __rdtscp(&aux); }
-        static inline Cycles RDTSCP_LFENCE() { _mm_lfence(); unsigned int aux; return __rdtscp(&aux); }
+        __attribute__((always_inline)) static inline Cycles RDTSC() { return __rdtsc(); }
+        __attribute__((always_inline)) static inline Cycles RDTSCP() { unsigned int aux; return __rdtscp(&aux); }
+        __attribute__((always_inline)) static inline Cycles RDTSCP_LFENCE() { _mm_lfence(); unsigned int aux; return __rdtscp(&aux); }
     };
 
     struct alignas(64) RingBuffer {
         Cycles data[MAX_SAMPLES];
-        size_t head = 0; size_t count = 0;
-        inline void push(Cycles val) {
+        size_t head = 0;
+
+        __attribute__((always_inline)) inline void push(Cycles val) {
             data[head] = val;
-            head = (head + 1) % MAX_SAMPLES;
-            if (count < MAX_SAMPLES) count++;
+            head = (head + 1) & BUFFER_MASK; // Fast Bitwise wrapping
         }
     };
 
     struct ThreadStorage {
-        // Structure of Arrays (SoA) for cache-friendly stack
-        // made to counter latency augmentation in MAX_ACTIVE_SLOTS>16 (16² cache)
         ID stack_ids[MAX_ACTIVE_SLOTS];
         Cycles stack_starts[MAX_ACTIVE_SLOTS];
         size_t stack_ptr = 0;
 
+        // pointer comparison
         std::map<ID, RingBuffer> history;
-
-        ThreadStorage() {
-            for (size_t i = 0; i < MAX_ACTIVE_SLOTS; ++i) stack_ids[i] = nullptr;
+        __attribute__((always_inline)) inline RingBuffer* GetOrAdd(ID id) {
+            return &history[id];
         }
     };
 
@@ -69,54 +84,82 @@ namespace Latte {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             Cycles c2 = Intrinsic::RDTSC();
             auto t2 = std::chrono::high_resolution_clock::now();
-            double ns_elapsed = (double)std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();
-            cycles_per_ns = (double)(c2 - c1) / ns_elapsed;
+            double ns = (double)std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();
+            cycles_per_ns = (double)(c2 - c1) / ns;
         }
-        void RegisterThreadBuffer(ThreadStorage* ts) {
+        void Register(ThreadStorage* ts) {
             std::lock_guard<std::mutex> lock(mutex);
             thread_buffers.push_back(ts);
+        }
+
+        // Non-blocking Data Extraction
+        // Returns all valid samples collected so far for a specific ID
+        // Thread-safe relative to the writers (atomics)
+        std::vector<Cycles> ExtractRaw(ID id) {
+            std::vector<Cycles> output;
+            output.reserve(1024);
+
+            std::lock_guard<std::mutex> lock(mutex);
+
+            for (auto* ts : thread_buffers) {
+                // Safety: map lookup isn't technically thread-safe if keys are added dynamically during extraction, but usually ID set is stable
+                auto it = ts->history.find(id);
+                if (it != ts->history.end()) {
+                    RingBuffer& rb = it->second;
+                    for(size_t i=0; i<MAX_SAMPLES; ++i) {
+                        Cycles v = rb.data[i];
+                        if(v > 0) output.push_back(v);
+                    }
+                }
+            }
+            return output;
         }
     };
 
     inline ThreadStorage* GetThreadStorage() {
         static thread_local ThreadStorage* ts = nullptr;
-        if (!ts) {
+        if (__builtin_expect(!ts, 0)) {
             ts = new ThreadStorage();
-            Manager::Get().RegisterThreadBuffer(ts);
+            Manager::Get().Register(ts);
         }
         return ts;
     }
 
+    namespace Internal {
+        inline RingBuffer* GetBuffer(ID id) { return GetThreadStorage()->GetOrAdd(id); }
+    }
+
     template <Cycles (*TimeFunc)()>
     struct Recorder {
-        static inline void Start(ID id) {
+        __attribute__((always_inline)) static inline void Start(ID id) {
             ThreadStorage* ts = GetThreadStorage();
-            if (ts->stack_ptr < MAX_ACTIVE_SLOTS) {
+            if (__builtin_expect(ts->stack_ptr < MAX_ACTIVE_SLOTS, 1)) {
                 ts->stack_ids[ts->stack_ptr] = id;
                 ts->stack_starts[ts->stack_ptr] = TimeFunc();
                 ts->stack_ptr++;
             }
         }
 
-        static inline void Stop(ID id) {
+        __attribute__((always_inline)) static inline Cycles Stop(ID id) {
             Cycles end = TimeFunc();
             ThreadStorage* ts = GetThreadStorage();
 
-            // O(1) Stack Pop
-            if (ts->stack_ptr > 0) {
+            if (__builtin_expect(ts->stack_ptr > 0, 1)) {
                 ts->stack_ptr--;
-                // If nested correctly, top of stack is our ID
-                // If not nested, we still pop to keep the stack clean
-                ID current_id = ts->stack_ids[ts->stack_ptr];
-                ts->history[current_id].push(end - ts->stack_starts[ts->stack_ptr]); //TODO: remove delta out of here
+                Cycles delta = end - ts->stack_starts[ts->stack_ptr]; // Fast bitwise push
+                ts->history[ts->stack_ids[ts->stack_ptr]].push(delta);
+                return delta; //Return the raw latency
             }
+            return 0;
         }
     };
-
     namespace Fast { inline void Start(ID id) { Recorder<Intrinsic::RDTSC>::Start(id); } inline void Stop(ID id) { Recorder<Intrinsic::RDTSC>::Stop(id); } }
     namespace Mid  { inline void Start(ID id) { Recorder<Intrinsic::RDTSCP>::Start(id); } inline void Stop(ID id) { Recorder<Intrinsic::RDTSCP>::Stop(id); } }
     namespace Hard { inline void Start(ID id) { Recorder<Intrinsic::RDTSCP_LFENCE>::Start(id); } inline void Stop(ID id) { Recorder<Intrinsic::RDTSCP_LFENCE>::Stop(id); } }
-
+    inline std::vector<Cycles> Snapshot(ID id) {
+        return Manager::Get().ExtractRaw(id);
+    }
+    
     inline std::string FormatTime(double ns) {
         std::stringstream ss; ss << std::fixed << std::setprecision(2);
         if (ns < 1000.0) ss << ns << " ns";
@@ -133,15 +176,16 @@ namespace Latte {
             std::lock_guard<std::mutex> lock(mgr.mutex);
             for (auto* ts : mgr.thread_buffers) {
                 for (auto& [id, buffer] : ts->history) {
-                    if (std::string(id) == "__internal_null_ping") continue;
-                    for (size_t i = 0; i < buffer.count; ++i) {
-                        global_data[id].push_back(static_cast<double>(buffer.data[i]));
+                    // Scan buffer for non-zero entries
+                    for (size_t i = 0; i < MAX_SAMPLES; ++i) {
+                        if (buffer.data[i] > 0) {
+                            global_data[id].push_back(static_cast<double>(buffer.data[i]));
+                        }
                     }
                 }
             }
         }
 
-        // --- Helper: Large Number Formatting (K, M, B, T) ---
         auto FormatLarge = [](double val) {
             const char* units[] = {"", "K", "M", "B", "T"};
             int unit_idx = 0;
@@ -155,7 +199,6 @@ namespace Latte {
             return ss.str();
         };
 
-        // --- Strict ASCII Table Definition ---
         const int C1 = 25; // Name
         const int C2 = 10; // Samples
         const int C3 = 13; // Avg
@@ -164,7 +207,7 @@ namespace Latte {
         const int C6 = 10; // Skew
         const int C7 = 13; // Min
         const int C8 = 13; // Max
-        const int C9 = 13; // Range
+        const int C9 = 13; // delta Range
 
         const int TABLE_WIDTH = C1 + C2 + C3 + C4 + C5 + C6 + C7 + C8 + C9 + 2;
         const std::string line(TABLE_WIDTH, '-');
@@ -178,7 +221,7 @@ namespace Latte {
             return (res.length() > (size_t)width) ? res.substr(0, width) : res;
         };
 
-        auto fmt = [&](double value) {
+        auto ToNS = [&](double value) {
             return InTime ? FormatTime(value / mgr.cycles_per_ns) : FormatLarge(value);
         };
 
@@ -195,7 +238,7 @@ namespace Latte {
             << col("SKEW", C6)
             << col("MIN", C7)
             << col("MAX", C8)
-            << col("RANGE (D)", C9) << " |\n";
+            << col("RANGE (Δ)", C9) << " |\n";
 
         oss << "|" << line << "|\n";
 
@@ -224,13 +267,13 @@ namespace Latte {
 
             oss << "| " << col(id, C1, true)
                 << col(std::to_string(n), C2)
-                << col(fmt(avg), C3)
-                << col(fmt(median), C4)
-                << col(fmt(std_dev), C5)
+                << col(ToNS(avg), C3)
+                << col(ToNS(median), C4)
+                << col(ToNS(std_dev), C5)
                 << col(sk.str(), C6)
-                << col(fmt(values.front()), C7)
-                << col(fmt(values.back()), C8)
-                << col(fmt(values.back() - values.front()), C9) << " |\n";
+                << col(ToNS(values.front()), C7)
+                << col(ToNS(values.back()), C8)
+                << col(ToNS(values.back() - values.front()), C9) << " |\n";
         }
 
         oss << "#" << d_line << "#" << std::endl;
