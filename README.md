@@ -14,7 +14,7 @@ Latte is engineered to solve the "Observer Effect," ensuring that the act of mea
 Standard profiling tools often utilize global mutexes or atomic counters that cause cache line contention between CPU cores. Latte utilizes `thread_local` storage. Each thread records data into its own private buffers, ensuring that measurement never forces one thread to stall for another.
 
 ### 2. ID-as-a-Pointer (Zero String Hashing)
-Most profilers process string IDs by hashing them at runtime to locate a storage bucket. Latte utilizes `const char*` as the ID. Because string literals occupy fixed memory addresses in the data segment, Latte compares the 64-bit memory address rather than the string content. This reduces ID identification to a single pointer comparison.
+Latte uses `const char*` IDs so identification is based on the pointer value (address), avoiding string hashing and string comparisons. IDs are used as keys (e.g., `std::map<const char*, RingBuffer>`); comparisons are pointer comparisons, and lookup cost scales as `O(log N)` with the number of distinct IDs on the thread.
 
 **Important:** IDs are compared by pointer value, not by string contents. Only use:
 - string literals: `"MyComponent"`
@@ -24,27 +24,22 @@ Do **not** pass temporary `std::string::c_str()` pointers or stack buffers.
 
 ### 3. Stack-Based Capturing (Nesting support)
 To support deep nesting without linear search overhead, Latte utilizes a per-thread SoA stack.
-* `Start()` pushes the ID and timestamp to the stack index.
-* `Stop()` pops the top of the stack and calculates the cycle delta.
+* `Start()` pushes the ID, timestamp, and capture Mode (Fast/Mid/Hard) to the stack index.
+* `Stop()` pops the top of the stack, calculates the cycle delta, and carries the start/stop Modes into calibration selection.
 
 This keeps Start/Stop overhead stable with nesting (up to the fixed maximum depth).
 
-### 4. About “Deferred Aggregation / Zero Map Lookups” (current behavior)
-Earlier descriptions of Latte emphasized a two-phase “raw log then aggregate” model with “zero map lookups” on the hot path.
+### 4. Map lookups on `Stop()`
 
-**The current `Latte.hpp` implementation does *not* provide zero-lookups on `Stop()`.** Samples are written into a per-thread container keyed by ID:
-- Each thread owns a `ThreadStorage`.
-- Each `ThreadStorage` keeps a `std::map<ID, RingBuffer>` (`history`).
-- On `Stop()`, Latte performs a `std::map` lookup (`O(log N)`, where `N` is the number of IDs seen by that thread) and then pushes the cycle delta into that ring buffer.
+Each thread owns a `ThreadStorage` that keeps per-ID history in an ordered map:
 
-What you still get:
-- no cross-thread contention on sampling (per-thread storage)
-- fixed-capacity buffers (bounded memory)
+- `std::map<const char*, RingBuffer> history`
 
-How to minimize the impact in extremely hot paths:
-- **Prefer `LATTE_PULSE("ID")`** when you want “delta since last event” (it caches the ring buffer pointer per thread after the first call).
-- Warm up the ID set at thread startup to move “first use” work (map insert/alloc) out of the hot path.
-- If you need true fixed-index, zero-lookup recording for many IDs, the typical next step is adding a numeric-ID + flat-array mode.
+On `Stop()`, Latte looks up the ring buffer for the ID in that map (`O(log N)` pointer comparisons) and pushes the measured cycle delta into the buffer.
+
+Notes:
+- Keys are compared by **address** (`const char*`), so there is **no string hashing** and no `strcmp`.
+- The container is still a tree (`std::map`), so lookup scales as `O(log N)` with the number of distinct IDs on the thread.
 
 ### 5. Cache-Line Alignment & SoA
 To prevent "False Sharing" and maximize CPU pre-fetcher efficiency, internal buffers are aligned to 64-byte boundaries `(alignas(64))`. The use of **Structure of Arrays** instead of Arrays of Structs ensures that only relevant timing data is pulled into the **L1 cache**, preventing unnecessary memory bandwidth usage.
@@ -63,25 +58,42 @@ Latte provides insights into the distribution of latency, focusing on long-tail 
 * **Median**
 * **Standard Deviation**
 * **Skewness**
-* **Min / Max**
-* **Range (Δ)**
+* **Min**
+* **Max**
+* **Range (Δ)** 
+* **BYPASS** number of filtered samples classified as OS bypass
+
+
+### Data cleaning
+
+Before computing report statistics, `DumpToStream()` runs `Internal::CleanData` over the collected samples for each `(thread, id)`. The pass:
+- counts and filters extreme preemption/scheduler samples (“OS interrupts”)
+- filters statistical outliers using an interquartile-range (IQR) cutoff (with a fallback max-based cutoff)
+
 
 ```ascii
-#=============================================================================================================================#
-| LATTE TELEMETRY [TIME]                                                                                                      |
-#=============================================================================================================================#
-| COMPONENT                   SAMPLES          AVG       MEDIAN      STD DEV      SKEW          MIN          MAX    RANGE (Δ) |
-|-----------------------------------------------------------------------------------------------------------------------------|
-| NestedLevel                      11    222.14 us    244.34 us     70.24 us     -2.85     10.02 ns    244.56 us    244.55 us |
-| PointerChasing                    1    901.71 ns    901.71 ns      0.00 ns      0.00    901.71 ns    901.71 ns      0.00 ns |
-| LoopIteration                  1000     11.03 ns     10.02 ns      3.02 ns      2.65     10.02 ns     20.04 ns     10.02 ns |
-| Worker_3                       1000     65.60 us     65.14 us     15.25 us     24.52     17.93 us    496.67 us    478.74 us |
-| Worker_2                       1000     65.64 us     65.14 us     15.78 us     24.92     14.47 us    516.61 us    502.14 us |
-| Worker_1                       1000     65.72 us     65.14 us     22.71 us     30.63     17.96 us    776.41 us    758.45 us |
-| Worker_0                       1000     65.74 us     65.13 us     21.69 us     30.33     16.05 us    742.28 us    726.23 us |
-#=============================================================================================================================#
+#==============================================================================================================#
+| LATTE TELEMETRY [TIME][CAL]                                                                                  |
+#==============================================================================================================#
+| OVERHEAD H[Start] x W[Stop]                                                                                  |
+|                        F             M             H                                                         |
+| F                0.21 ns      10.02 ns      10.02 ns                                                         |
+| M                0.21 ns      10.02 ns      10.02 ns                                                         |
+| H                0.21 ns      10.02 ns      10.02 ns                                                         |
+| PULSE           10.02 ns                                                                                     |
+|--------------------------------------------------------------------------------------------------------------|
+| COMPONENT             SAMPLES       AVG    MEDIAN   STD DEV    SKEW       MIN       MAX     RANGE    BYPASS  |
+|--------------------------------------------------------------------------------------------------------------|
+| DP_Build_Total              1   38.07 s   38.07 s   0.00 ns    0.00   38.07 s   38.07 s   0.00 ns         0  |
+| DP_StateLoop            65536  31.15 us  30.96 us   1.42 us   12.13  29.32 us  95.10 us  65.78 us         0  |
+| Sim_Tick_Total           4997 226.79 ns 220.42 ns  76.04 ns    1.40 110.21 ns 821.55 ns 711.34 ns         3  |
+| Sim_OrderFlow            4997  43.62 ns  29.63 ns  36.61 ns    2.02   9.59 ns 380.51 ns 370.91 ns         3  |
+| Sim_AskLoop              1216   1.03 us 711.34 ns   1.06 us    2.14   0.00 ns   8.30 us   8.30 us         0  |
+| Sim_BidLoop              1247   1.12 us 751.42 ns   4.21 us   32.56   0.00 ns 145.96 us 145.96 us         0  |
+| Sim_RiskPnL              5000   6.24 ns   9.59 ns   4.67 ns   -0.57   0.00 ns  19.82 ns  19.82 ns         0  |
+#==============================================================================================================#
 ```
-
+> Overhead correspond to the latency monitored by two beacon measurement without code between
 ---
 
 ## Implementation Guide
@@ -136,22 +148,45 @@ for (;;) {
 std::vector<Latte::Cycles> samples = Latte::Snapshot("Physics_Engine");
 ```
 
-### 6. Report generation: `DumpToStream(std::ostream&, bool InTime = true)`
+### 6. Report generation: `DumpToStream`
 Send output to any `std::ostream` at the conclusion of the execution period.
 
 ```cpp
-Latte::DumpToStream(std::cout);        // default: TIME (ns/us/ms)
-Latte::DumpToStream(std::cout, false); // TSCs (raw)
+Latte::DumpToStream(std::ostream& os,
+                    Latte::Parameter::Unit unit,
+                    Latte::Parameter::Data data_mode);
 ```
 
-Time formatting uses an internal calibration (`cycles_per_ns`) performed during initialization.
+Defaults:
+- `unit = Latte::Parameter::Cycle`
+- `data_mode = Latte::Parameter::Raw`
+
+Common usage:
+```cpp
+// Raw cycles (built-in defaults)
+Latte::DumpToStream(std::cout);
+
+// Calibrated time (ns/us/ms formatting) with overhead correction
+Latte::DumpToStream(std::cout,
+                    Latte::Parameter::Time,
+                    Latte::Parameter::Calibrated);
+```
+
+Calibration and overhead:
+- Time formatting uses an internal `cycles_per_ns`.
+- When calibration is active, `DumpToStream()` subtracts measured instrumentation overhead from each sample before computing statistics (conceptually: `v' = v - overhead`).
+- When calibration is active, `DumpToStream()` prints a secondary table labeled `OVERHEAD H[Start] x W[Stop]` with measured overhead for each Start/Stop mode permutation.
+
+Mixed-mode calibration:
+- The per-thread stack stores the capture Mode (Fast/Mid/Hard) alongside the timestamp.
+- On `Stop()`, calibration/overhead selection is keyed by the `(start_mode, stop_mode)` pair (e.g., Fast×Fast, Fast×Mid, Hard×Mid).
 
 ---
 
 ## Storage model
 
 ### Ring buffer behavior (overwrite semantics)
-Each `(thread, id)` owns a fixed-size ring buffer. New samples overwrite old ones when the buffer wraps.
+Each `(thread, id)` owns a fixed-size ring buffer. New samples overwrite earlier ones when the buffer wraps.
 
 - Slots are initialized to `0`.
 - Non-zero entries are treated as valid samples during extraction and dumping.
@@ -212,9 +247,18 @@ It also includes intrinsics headers as:
 - MSVC: `<intrin.h>`
 - GCC/Clang: `<x86intrin.h>`
 
-For MSVC portability, you may need to guard/replace GCC pragmas and attributes and replace `__builtin_expect` with an MSVC-friendly branch hint.
+For MSVC portability, these constructs need conditional compilation. For example, guard the GCC pragma:
+
+```cpp
+#if defined(__GNUC__) || defined(__clang__)
+#  pragma GCC optimize ("O3")
+#endif
+```
+
+Similarly, wrap `__attribute__` and `__builtin_expect` behind macros so the header can be compiled under MSVC without warnings/errors.
 
 ---
+
 
 ## ☕️ Latency Report
 
