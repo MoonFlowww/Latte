@@ -54,7 +54,7 @@ struct BenchResult {
         double* samples = samples_ptr.get(); \
         \
         /* Warmup */ \
-        for(volatile int w=0; w < (ITERATIONS); ++w) { CODE_BLOCK } \
+        for(volatile int w=0; w < (ITERATIONS); w+=1) { CODE_BLOCK } \
         \
         uint64_t start, end; \
         \
@@ -85,7 +85,6 @@ struct BenchResult {
         return std::make_unique<BenchResult>(BenchResult{avg, med, min, max, std_dev, NAME}); \
     })()
 
-
 void PrintResult(const BenchResult& r, double baseline) {
     // Pure Latency calculations (subtracting latency of ACTION(CODE_BLOCK -> TARGET_CODE))
     double adj_med = (r.med - baseline) > 0 ? (r.med - baseline) : 0.0;
@@ -107,7 +106,7 @@ void PrintResult(const BenchResult& r, double baseline) {
 }
 
 int main() {
-    PinThread(2);
+    PinThread(3);
 
     std::cout << "+======================================================================================================+" << std::endl;
     std::cout << "| LATTE LATENCY BENCHMARK (Cycles per Operation)                                                       |" << std::endl;
@@ -177,6 +176,8 @@ int main() {
     });
     PrintResult(*r_chrono, r_baseline->med);
     std::cout << "+-------------------------+----------+----------+----------+----------+----------+----------+----------+" << std::endl;
+
+    Latte::DumpToStream(std::cout, Latte::Parameter::Cycle, Latte::Parameter::Calibrated);
 
     return 0;
 }
