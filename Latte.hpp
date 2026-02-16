@@ -561,7 +561,7 @@ inline void DumpToStream(std::ostream& oss, Parameter::Unit unit = Parameter::Cy
     const auto M = (uint8_t)Mode::Mid;
     const auto H = (uint8_t)Mode::Hard;
 
-    const std::string END(57, ' ');
+    const std::string END(82, ' ');
 
     write_row({col("OVERHEAD H[Start] x W[Stop]", TABLE_WIDTH - 2, true)});
     write_row({mcol("", 10, true) + mcol("F", MW) + mcol("M", MW) + mcol("H", MW) + END});
@@ -626,9 +626,10 @@ inline void DumpToStream(std::ostream& oss, Parameter::Unit unit = Parameter::Cy
     std::ostringstream sk;
     sk << std::fixed << std::setprecision(2) << skew;
 
+    const std::string component_name = (id !=nullptr) ? std::string(id) : std::string("<null-id>");
 
     write_row({
-      col(id, C1, true),
+      col(component_name, C1, true),
       col(std::to_string(n), C2),
       col(ToDisp(avg), C3),
       col(ToDisp(median), C4),
