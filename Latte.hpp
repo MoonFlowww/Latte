@@ -252,8 +252,8 @@ struct Recorder {
   __attribute__((always_inline)) static inline void Start(ID id) {
     ThreadStorage* ts = GetThreadStorage();
     if (__builtin_expect(ts->stack_ptr < MAX_ACTIVE_SLOTS, 1)) {
-      ts->stack_ids[ts->stack_ptr] = id;
       ts->stack_starts[ts->stack_ptr] = TimeFunc();
+      ts->stack_ids[ts->stack_ptr] = id;
       ts->stack_modes[ts->stack_ptr] = static_cast<uint8_t>(M);
       ts->stack_ptr++;
     }
