@@ -3,7 +3,7 @@
 Latte is a header-only C++ telemetry library designed for high‑frequency trading, game engines, and real‑time systems where measurement overhead must be measured in nanoseconds rather than microseconds.
 Latte measures **CPU cycles** using x86_64 timestamp counters (RDTSC / RDTSCP) and stores samples in **per‑thread fixed‑size ring buffers** for later reporting.
 
-*No dynamic allocations occur during `Start`/`Stop` – only lock‑free per‑thread storage.*
+> *No dynamic allocations occur during `Start`/`Stop` – only lock‑free per‑thread storage.*
 
 ---
 
@@ -75,7 +75,7 @@ Before computing report statistics, `DumpToStream()` runs `Internal::CleanData` 
 - Samples **above the cutoff** are counted as `OUTLIER` and excluded from statistics.
 - Remaining samples are sorted and used for median, mean, stddev, skew, min, max, and range.
 
-*This bucket‑max IQR method is more robust against long‑tail outliers than a raw IQR.*
+> *This bucket‑max IQR method is more robust against long‑tail outliers than a raw IQR.*
 
 
 ```ascii
@@ -144,7 +144,7 @@ Latte::Fast::Stop("Frame_Total");
 - First call per thread: initialises the buffer pointer and stores `RDTSC()` as `last` – **no sample is pushed**.
 - Subsequent calls: compute `now - last`, push the delta into the ring buffer (with a fixed calibration key `Internal::CALIB_KEY_PULSE`), and update `last`.
 
-*The recorded delta represents the time span between two consecutive `LATTE_PULSE` invocations, which can be used to measure loop iteration time or polling frequency.*
+> *The recorded delta represents the time span between two consecutive `LATTE_PULSE` invocations, which can be used to measure loop iteration time or polling frequency.*
 
 ```cpp
 for (;;) {
@@ -265,7 +265,8 @@ However **`DumpToStream` and `Snapshot` are NOT safe to call concurrently with a
 #endif
 ```
 The intrinsics headers are already handled: `<intrin.h>` for MSVC, `<x86intrin.h>` for GCC/Clang.
-*The library is not portable to non‑x86_64 architectures because it relies on `__rdtsc` / `__rdtscp`.*
+
+> *The library is not portable to non‑x86_64 architectures because it relies on `__rdtsc` / `__rdtscp`.*
 
 
 ---
