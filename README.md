@@ -2,6 +2,7 @@
 
 Latte is a header-only C++ telemetry library designed for high‑frequency trading, game engines, and real‑time systems where measurement overhead must be measured in nanoseconds rather than microseconds.
 Latte measures **CPU cycles** using x86_64 timestamp counters (RDTSC / RDTSCP) and stores samples in **per‑thread fixed‑size ring buffers** for later reporting.
+
 *No dynamic allocations occur during `Start`/`Stop` – only lock‑free per‑thread storage.*
 
 ---
@@ -66,11 +67,14 @@ Latte provides insights into the distribution of latency, focusing on long-tail 
 
 
 ### Data cleaning
+
 Before computing report statistics, `DumpToStream()` runs `Internal::CleanData` over the collected samples for each `(thread, id)`. The cleaning pass:
+
 - **Buckets samples** into groups of 1 000, records the maximum of each bucket.
 - Calculates an **IQR (interquartile range) on the bucket maxima** to determine a cutoff.
 - Samples **above the cutoff** are counted as `OUTLIER` and excluded from statistics.
 - Remaining samples are sorted and used for median, mean, stddev, skew, min, max, and range.
+
 *This bucket‑max IQR method is more robust against long‑tail outliers than a raw IQR.*
 
 
@@ -135,9 +139,11 @@ Latte::Fast::Stop("Frame_Total");
 `LATTE_PULSE("ID")` records the cycle delta **between successive calls** on the same thread.
 
 **Implementation details:**
+
 - The macro uses static `thread_local` pointers to a `RingBuffer` and a `last` timestamp, avoiding repeated map lookups after the first call.
 - First call per thread: initialises the buffer pointer and stores `RDTSC()` as `last` – **no sample is pushed**.
 - Subsequent calls: compute `now - last`, push the delta into the ring buffer (with a fixed calibration key `Internal::CALIB_KEY_PULSE`), and update `last`.
+
 *The recorded delta represents the time span between two consecutive `LATTE_PULSE` invocations, which can be used to measure loop iteration time or polling frequency.*
 
 ```cpp
