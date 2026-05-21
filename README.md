@@ -1,8 +1,8 @@
 # ☕️ Latte: Ultra-Low Latency C++ Telemetry Framework
 
-Latte is a header-only C++ telemetry library designed for high-frequency trading, game engines, and real-time systems where measurement overhead must be measured in nanoseconds rather than microseconds.
-
-Latte measures **CPU cycles** using x86_64 timestamp counters (TSC) and stores samples in **per-thread fixed-size ring buffers** for later reporting.
+Latte is a header-only C++ telemetry library designed for high‑frequency trading, game engines, and real‑time systems where measurement overhead must be measured in nanoseconds rather than microseconds.
+Latte measures **CPU cycles** using x86_64 timestamp counters (RDTSC / RDTSCP) and stores samples in **per‑thread fixed‑size ring buffers** for later reporting.
+*No dynamic allocations occur during `Start`/`Stop` – only lock‑free per‑thread storage.*
 
 ---
 
@@ -21,6 +21,7 @@ Latte uses `const char*` IDs so identification is based on the pointer value (ad
 - stable static storage: `static const char name[] = "MyComponent";`
 
 Do **not** pass temporary `std::string::c_str()` pointers or stack buffers.
+
 
 ### 3. Stack-Based Capturing (Nesting support)
 To support deep nesting without linear search overhead, Latte utilizes a per-thread SoA stack.
@@ -65,10 +66,12 @@ Latte provides insights into the distribution of latency, focusing on long-tail 
 
 
 ### Data cleaning
-
-Before computing report statistics, `DumpToStream()` runs `Internal::CleanData` over the collected samples for each `(thread, id)`. The pass:
-- counts and filters extreme preemption/scheduler samples (“OS interrupts”)
-- filters statistical outliers using an interquartile-range (IQR) cutoff (with a fallback max-based cutoff)
+Before computing report statistics, `DumpToStream()` runs `Internal::CleanData` over the collected samples for each `(thread, id)`. The cleaning pass:
+- **Buckets samples** into groups of 1 000, records the maximum of each bucket.
+- Calculates an **IQR (interquartile range) on the bucket maxima** to determine a cutoff.
+- Samples **above the cutoff** are counted as `OUTLIER` and excluded from statistics.
+- Remaining samples are sorted and used for median, mean, stddev, skew, min, max, and range.
+*This bucket‑max IQR method is more robust against long‑tail outliers than a raw IQR.*
 
 
 ```ascii
@@ -82,7 +85,7 @@ Before computing report statistics, `DumpToStream()` runs `Internal::CleanData` 
 | H                0.21 ns      10.02 ns      10.02 ns                                                         |
 | PULSE           10.02 ns                                                                                     |
 |--------------------------------------------------------------------------------------------------------------|
-| COMPONENT             SAMPLES       AVG    MEDIAN   STD DEV    SKEW       MIN       MAX     RANGE    BYPASS  |
+| COMPONENT             SAMPLES       AVG    MEDIAN   STD DEV    SKEW       MIN       MAX     RANGE    OUTLIER |
 |--------------------------------------------------------------------------------------------------------------|
 | DP_Build_Total              1   38.07 s   38.07 s   0.00 ns    0.00   38.07 s   38.07 s   0.00 ns         0  |
 | DP_StateLoop            65536  31.15 us  30.96 us   1.42 us   12.13  29.32 us  95.10 us  65.78 us         0  |
@@ -93,7 +96,7 @@ Before computing report statistics, `DumpToStream()` runs `Internal::CleanData` 
 | Sim_RiskPnL              5000   6.24 ns   9.59 ns   4.67 ns   -0.57   0.00 ns  19.82 ns  19.82 ns         0  |
 #==============================================================================================================#
 ```
-> Overhead correspond to the latency monitored by two beacon measurement without code between
+> *The `OVERHEAD` table shows the measured **instrumentation overhead** (in cycles or time) for every combination of `Start` mode (row) and `Stop` mode (column). For example, `F -> M` is the overhead of a `Fast::Start` followed by a `Mid::Stop`; `PULSE` is independent. These values are automatically subtracted when `Parameter::Calibrated` is used.*
 ---
 
 ## Implementation Guide
@@ -127,12 +130,15 @@ Latte::Mid::Stop("Physics_Engine");
 Latte::Fast::Stop("Frame_Total");
 ```
 
+
 ### 4. `LATTE_PULSE("ID")` (delta between successive events)
 `LATTE_PULSE("ID")` records the cycle delta **between successive calls** on the same thread.
 
-Behavior:
-- The first call per thread initializes internal state (captures a baseline timestamp) and **does not record** a delta.
-- Subsequent calls record `(now - last)` in a cached ring buffer pointer and update `last`.
+**Implementation details:**
+- The macro uses static `thread_local` pointers to a `RingBuffer` and a `last` timestamp, avoiding repeated map lookups after the first call.
+- First call per thread: initialises the buffer pointer and stores `RDTSC()` as `last` – **no sample is pushed**.
+- Subsequent calls: compute `now - last`, push the delta into the ring buffer (with a fixed calibration key `Internal::CALIB_KEY_PULSE`), and update `last`.
+*The recorded delta represents the time span between two consecutive `LATTE_PULSE` invocations, which can be used to measure loop iteration time or polling frequency.*
 
 ```cpp
 for (;;) {
@@ -186,11 +192,13 @@ Mixed-mode calibration:
 ## Storage model
 
 ### Ring buffer behavior (overwrite semantics)
-Each `(thread, id)` owns a fixed-size ring buffer. New samples overwrite earlier ones when the buffer wraps.
+Each `(thread, id)` owns a fixed‑size ring buffer (`alignas(64)` for cache‑line isolation).
+- **Write:** `push()` stores a new `Cycles` value at the current `head` and advances `head = (head+1) & BUFFER_MASK`. No zeroing is performed – old values are silently overwritten.
+- **Read:** `ExtractRaw()` and `DumpToStream()` consider **any positive value** as a valid sample. (Zero is the initial state and is ignored.)
+- Because overwrites happen unconditionally, the buffer always contains the **most recent** `MAX_SAMPLES` samples (some of which may be zero only if fewer than `MAX_SAMPLES` have ever been written).
+- Default capacity: `MAX_SAMPLES = 65536` (`BUFFER_PWR = 16`). Must stay a power of two for the bitmask wrap.
 
-- Slots are initialized to `0`.
-- Non-zero entries are treated as valid samples during extraction and dumping.
-- Only the most recent `MAX_SAMPLES` samples per `(thread, id)` are retained.
+
 
 ### `MAX_SAMPLES` default (2^16)
 The default capacity is **65,536 samples** per ID per thread:
@@ -219,11 +227,12 @@ Latte uses a per-thread stack to support nesting:
 
 Sampling (`Start/Stop` and `LATTE_PULSE`) is designed for low contention by using per-thread storage.
 
-However, **`DumpToStream` and `Snapshot` are not safe to run concurrently with active sampling threads**:
-- While the manager mutex protects the list of registered thread buffers, ring-buffer data and per-thread maps are written without atomics.
-- Calling `DumpToStream` / `Snapshot` while other threads are recording can cause data races.
+However **`DumpToStream` and `Snapshot` are NOT safe to call concurrently with active sampling threads.**
+- The manager’s mutex only protects the global list of `ThreadStorage` pointers – **it does not synchronise access to the ring buffers** or the per‑thread `history` map.
+- Writes (from `Start`/`Stop`/`LATTE_PULSE`) are performed without locks or atomics for maximum speed.
+- Concurrent reads while writes happen on the same thread or another thread cause **data races** (undefined behaviour).
 
-**Recommended usage:** call `DumpToStream` / `Snapshot` only after worker threads have stopped instrumenting (e.g., after joining threads or after a barrier that stops sampling).
+**Recommended usage:** Call `DumpToStream` / `Snapshot` only after all worker threads have stopped instrumenting (e.g., after joining threads, or after a barrier that guarantees no `Start`/`Stop` is in flight).
 
 ---
 
@@ -238,24 +247,20 @@ However, **`DumpToStream` and `Snapshot` are not safe to run concurrently with a
 
 ## Compiler constructs and portability notes
 
-`Latte.hpp` contains GCC/Clang-oriented constructs:
-- `#pragma GCC optimize ("O3")`
-- `__attribute__((always_inline))`
-- `__builtin_expect`
-
-It also includes intrinsics headers as:
-- MSVC: `<intrin.h>`
-- GCC/Clang: `<x86intrin.h>`
-
-For MSVC portability, these constructs need conditional compilation. For example, guard the GCC pragma:
-
+`Latte.hpp` contains GCC/Clang‑specific constructs. To compile under MSVC, you must wrap them with preprocessor conditionals. Example:
 ```cpp
 #if defined(__GNUC__) || defined(__clang__)
-#  pragma GCC optimize ("O3")
+#pragma GCC optimize ("O3")
+#define ALWAYS_INLINE __attribute__((always_inline))
+#define LIKELY(expr) __builtin_expect(!!(expr), 1)
+#elif defined(_MSC_VER)
+#define ALWAYS_INLINE __forceinline
+#define LIKELY(expr) (expr)
 #endif
 ```
+The intrinsics headers are already handled: `<intrin.h>` for MSVC, `<x86intrin.h>` for GCC/Clang.
+*The library is not portable to non‑x86_64 architectures because it relies on `__rdtsc` / `__rdtscp`.*
 
-Similarly, wrap `__attribute__` and `__builtin_expect` behind macros so the header can be compiled under MSVC without warnings/errors.
 
 ---
 

@@ -3,18 +3,16 @@
 #include <vector>
 #include <string>
 #include <map>
-#include <thread>
 #include <mutex>
-#include <atomic>
 #include <cmath>
 #include <algorithm>
 #include <iomanip>
 #include <sstream>
-#include <chrono>
-#include <fstream>
 #include <array>
 #include <limits>
 #include <cstring>
+#include <memory>
+
 
 #if defined(_MSC_VER)
 #include <intrin.h>
@@ -34,6 +32,25 @@ do { \
     _l_rb->push(_l_now - _l_last, Latte::Internal::CALIB_KEY_PULSE); \
     _l_last = _l_now; \
   } \
+} while(0)
+
+
+#define LATTE_FREQ(cycles_per_ns) \
+do { \
+  struct timespec t1, t2; \
+  for (volatile int _i = 0; _i < 1000000; _i++); \
+  clock_gettime(CLOCK_MONOTONIC_RAW, &t1); \
+  uint64_t c1 = Latte::Intrinsic::RDTSC(); \
+  struct timespec start = t1; \
+  do { /*120ms*/ \
+    clock_gettime(CLOCK_MONOTONIC_RAW, &t2); \
+    if ((t2.tv_sec - start.tv_sec) * 1000000000ULL + (t2.tv_nsec - start.tv_nsec) > 120000000ULL) \
+      break; \
+  } while(1); \
+  uint64_t c2 = Latte::Intrinsic::RDTSC(); \
+  clock_gettime(CLOCK_MONOTONIC_RAW, &t2); \
+  double ns = (t2.tv_sec - t1.tv_sec) * 1e9 + (t2.tv_nsec - t1.tv_nsec); \
+  cycles_per_ns = (ns > 0.0) ? (double)(c2 - c1) / ns : 1.0; \
 } while(0)
 
 namespace Latte {
@@ -85,7 +102,7 @@ inline constexpr char CALIB_PULSE[] = "PxP";
 
 struct CleanResult {
   std::vector<double> values; // sorted
-  size_t bypass = 0; // OS bypass
+  size_t outlier = 0; // BUMED cleaning
   double cutoff = std::numeric_limits<double>::max();
 };
 
@@ -125,16 +142,16 @@ inline CleanResult CleanData(const std::vector<double>& values) {
     cutoff = (*std::max_element(bucket_maxes.begin(), bucket_maxes.end())) * 1.5;
   }
 
-  //Filter OS BYPASS
+  //Filter outlier via BUMED
   out.values.reserve(values.size());
   for (double v : values) {
-    if (v > cutoff) out.bypass++;
+    if (v > cutoff) out.outlier++;
     else out.values.push_back(v);
   }
 
   if (out.values.empty()) {
     out.values = values;
-    out.bypass = 0;
+    out.outlier = 0;
   }
 
   std::sort(out.values.begin(), out.values.end());
@@ -147,7 +164,7 @@ inline double MedianFromSorted(const std::vector<double>& sorted) {
   const size_t n = sorted.size();
   return (n % 2 == 0) ? (sorted[n/2 - 1] + sorted[n/2]) / 2.0 : sorted[n/2];
 }
-    }
+}
 
 struct alignas(64) RingBuffer {
   Cycles data[MAX_SAMPLES];
@@ -186,7 +203,6 @@ class Manager {
 public:
   std::mutex mutex;
   std::vector<ThreadStorage*> thread_buffers;
-
 
   double cycles_per_ns = 1.0; //Default: Unknown
 
@@ -280,17 +296,21 @@ namespace Fast { inline void Start(ID id) { Recorder<Mode::Fast, Intrinsic::RDTS
 namespace Mid  { inline void Start(ID id) { Recorder<Mode::Mid, Intrinsic::RDTSCP>::Start(id); } inline void Stop(ID id) { Recorder<Mode::Mid, Intrinsic::RDTSCP>::Stop(id); } }
 namespace Hard { inline void Start(ID id) { Recorder<Mode::Hard, Intrinsic::RDTSCP_LFENCE>::Start(id); } inline void Stop(ID id) { Recorder<Mode::Hard, Intrinsic::RDTSCP_LFENCE>::Stop(id); } }
 
-inline void Manager::Calibrate() {
-  { // TIME CALIBRATION (cycles_per_ns)
-    auto t1 = std::chrono::high_resolution_clock::now();
-    Cycles c1 = Intrinsic::RDTSC();
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    Cycles c2 = Intrinsic::RDTSC();
-    auto t2 = std::chrono::high_resolution_clock::now();
-    double ns = (double)std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();
-    cycles_per_ns = (ns > 0.0) ? (double)(c2 - c1) / ns : 1.0;
-  }
 
+struct ModeAPI {
+    void (*start)(ID);
+    void (*stop)(ID);
+    const char* name;
+};
+
+inline constexpr ModeAPI MODE_TABLE[3] = {
+    {Fast::Start, Fast::Stop, "Fast"},
+    {Mid::Start,  Mid::Stop,  "Mid"},
+    {Hard::Start, Hard::Stop, "Hard"}
+};
+ 
+inline void Manager::Calibrate() {
+  {LATTE_FREQ(cycles_per_ns);}
   // PERMUTATION OVERHEAD
   constexpr int WARMUP_ITERS = 10000; // naturally overwrite by circular buffer
   const int iters = (int)MAX_SAMPLES + WARMUP_ITERS;
@@ -298,51 +318,25 @@ inline void Manager::Calibrate() {
 
   (void)GetThreadStorage(); // Force TLS init before sampling
 
-  for (volatile int i = 0; i < iters; ++i) {
-    Internal::LFENCE();
-    Latte::Fast::Start(Internal::CALIB_FxF);
-    Latte::Fast::Stop(Internal::CALIB_FxF);
-    Internal::LFENCE();
+  constexpr const char* CALIB_LABELS[3][3] = {
+    {Internal::CALIB_FxF, Internal::CALIB_FxM, Internal::CALIB_FxH},
+    {Internal::CALIB_MxF, Internal::CALIB_MxM, Internal::CALIB_MxH},
+    {Internal::CALIB_HxF, Internal::CALIB_HxM, Internal::CALIB_HxH}
+  };
 
-    Internal::LFENCE();
-    Latte::Fast::Start(Internal::CALIB_FxM);
-    Latte::Mid::Stop(Internal::CALIB_FxM);
-    Internal::LFENCE();
+  for (int start_mode = 0; start_mode < 3; ++start_mode) {
+    for (int stop_mode = 0; stop_mode < 3; ++stop_mode) {
+      const auto& start_api = MODE_TABLE[start_mode];
+      const auto& stop_api = MODE_TABLE[stop_mode];
+      const char* label = CALIB_LABELS[start_mode][stop_mode];
 
-    Internal::LFENCE();
-    Latte::Fast::Start(Internal::CALIB_FxH);
-    Latte::Hard::Stop(Internal::CALIB_FxH);
-    Internal::LFENCE();
-
-    Internal::LFENCE();
-    Latte::Mid::Start(Internal::CALIB_MxF);
-    Latte::Fast::Stop(Internal::CALIB_MxF);
-    Internal::LFENCE();
-
-    Internal::LFENCE();
-    Latte::Mid::Start(Internal::CALIB_MxM);
-    Latte::Mid::Stop(Internal::CALIB_MxM);
-    Internal::LFENCE();
-
-    Internal::LFENCE();
-    Latte::Mid::Start(Internal::CALIB_MxH);
-    Latte::Hard::Stop(Internal::CALIB_MxH);
-    Internal::LFENCE();
-
-    Internal::LFENCE();
-    Latte::Hard::Start(Internal::CALIB_HxF);
-    Latte::Fast::Stop(Internal::CALIB_HxF);
-    Internal::LFENCE();
-
-    Internal::LFENCE();
-    Latte::Hard::Start(Internal::CALIB_HxM);
-    Latte::Mid::Stop(Internal::CALIB_HxM);
-    Internal::LFENCE();
-
-    Internal::LFENCE();
-    Latte::Hard::Start(Internal::CALIB_HxH);
-    Latte::Hard::Stop(Internal::CALIB_HxH);
-    Internal::LFENCE();
+      for (volatile int i = 0; i < iters; ++i) {
+        Internal::LFENCE();
+        start_api.start(label);
+        stop_api.stop(label);
+        Internal::LFENCE();
+      }
+    }
   }
 
   // PULSE OVERHEAD
@@ -582,7 +576,7 @@ inline void DumpToStream(std::ostream& oss, Parameter::Unit unit = Parameter::Cy
     col("MIN", C7),
     col("MAX", C8),
     col("RANGE", C9),
-    col("BYPASS", C_BY)
+    col("OUTLIER", C_BY)
   });
 
   oss << gray("|") << gray(line) << gray("|") << "\n";
@@ -604,7 +598,7 @@ inline void DumpToStream(std::ostream& oss, Parameter::Unit unit = Parameter::Cy
     // user-extracted cleaning function
     Internal::CleanResult clean = Internal::CleanData(adjusted);
     std::vector<double>& clean_values = clean.values;
-    size_t cpu_bypass_count = clean.bypass;
+    size_t outlier_count = clean.outlier;
 
     const size_t n = clean_values.size();
     if (n == 0) continue;
@@ -639,11 +633,11 @@ inline void DumpToStream(std::ostream& oss, Parameter::Unit unit = Parameter::Cy
       col(ToDisp(clean_values.front()), C7),
       col(ToDisp(clean_values.back()), C8),
       col(ToDisp(clean_values.back() - clean_values.front()), C9),
-      col(std::to_string(cpu_bypass_count), C_BY)
+      col(std::to_string(outlier_count), C_BY)
     });
   }
 
-  oss << "#" << d_line << "#" << std::endl;
+  oss << gray("#") << gray(d_line) << gray("#") << std::endl;
 
 }
 
