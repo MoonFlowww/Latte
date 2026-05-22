@@ -1,4 +1,12 @@
 #pragma once
+
+// Build mode configuration
+// Define LATTE_DISABLE to remove all telemetry overhead in production
+#ifndef LATTE_DISABLE
+  #define LATTE_ENABLED 1
+#else
+  #define LATTE_ENABLED 0
+#endif
 #pragma GCC optimize ("O3")
 #include <vector>
 #include <string>
@@ -645,4 +653,9 @@ inline void DumpToStream(std::ostream& oss, Parameter::Unit unit = Parameter::Cy
 }
 
 //once
-#define LATTE_CALIBRATE() do { Latte::Manager::Get().EnsureCalibrated(); } while(0)
+#if LATTE_ENABLED
+  #define LATTE_CALIBRATE() do { Latte::Manager::Get().EnsureCalibrated(); } while(0)
+#else
+  #define LATTE_CALIBRATE() do {} while(0)
+  #define LATTE_PULSE(id_str) do {} while(0)
+#endif
