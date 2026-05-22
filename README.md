@@ -30,11 +30,11 @@ void ProcessOrder() {
 
 Latte provides three levels of timing precision. They differ in **ordering guarantees** and **overhead**, choose the right one for your measurement context.
 
-| Mode   | Intrinsic(s)            | Serialization        | Overhead (cycles/call) | Best for |
-|--------|-------------------------|----------------------|------------------|-----------|
-| `Fast` | `__rdtsc()`             | None                 | ~30              | Coarse, high‑frequency polling where every cycle matters (e.g., Hot Path). |
-| `Mid`  | `__rdtscp()`            | Read serialization   | ~60              | Default for function‑level profiling, balanced accuracy and overhead. |
-| `Hard` | `lfence` + `__rdtscp()` | Full (LFENCE + serialize) | ~80      | Measuring tiny snippets (few dozen cycles) or when out‑of‑order execution could distort deltas. |
+| Mode   | Intrinsic(s)            | Serialization        | Best for |
+|--------|-------------------------|----------------------|-----------|
+| `Fast` | `__rdtsc()`             | None                 | Coarse, high‑frequency polling where every cycle matters (e.g., Hot Path). |
+| `Mid`  | `__rdtscp()`            | Read serialization   | Default for function‑level profiling, balanced accuracy and overhead. |
+| `Hard` | `lfence` + `__rdtscp()` | Full (LFENCE + serialize) | Measuring tiny snippets (few dozen cycles) or when out‑of‑order execution could distort deltas. |
 
 
 ### 3. Nested monitoring
