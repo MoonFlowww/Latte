@@ -26,6 +26,16 @@ void ProcessOrder() {
     Latte::Fast::Stop(__func__);
 }
 ```
+#### Measurement modes: Fast, Mid, Hard
+
+Latte provides three levels of timing precision. They differ in **ordering guarantees** and **overhead**, choose the right one for your measurement context.
+
+| Mode   | Intrinsic(s)            | Serialization        | Overhead (cycles/call) | Best for |
+|--------|-------------------------|----------------------|------------------|-----------|
+| `Fast` | `__rdtsc()`             | None                 | ~30              | Coarse, high‑frequency polling where every cycle matters (e.g., Hot Path). |
+| `Mid`  | `__rdtscp()`            | Read serialization   | ~60              | Default for function‑level profiling, balanced accuracy and overhead. |
+| `Hard` | `lfence` + `__rdtscp()` | Full (LFENCE + serialize) | ~80      | Measuring tiny snippets (few dozen cycles) or when out‑of‑order execution could distort deltas. |
+
 
 ### 3. Nested monitoring
 The framework supports up to **64** active overlapping slots per thread.
@@ -37,6 +47,8 @@ Latte::Mid::Start("Physics_Engine");
 Latte::Mid::Stop("Physics_Engine");
 Latte::Fast::Stop("Frame_Total");
 ```
+
+
 
 
 ### 4. `LATTE_PULSE("ID")` (delta between successive events)
