@@ -7,102 +7,6 @@ Latte measures **CPU cycles** using x86_64 timestamp counters (RDTSC / RDTSCP) a
 
 ---
 
-## Key Optimization Principles
-
-Latte is engineered to solve the "Observer Effect," ensuring that the act of measurement does not significantly distort the performance of the system being observed.
-
-### 1. Zero Contention (Thread Local Storage)
-Standard profiling tools often utilize global mutexes or atomic counters that cause cache line contention between CPU cores. Latte utilizes `thread_local` storage. Each thread records data into its own private buffers, ensuring that measurement never forces one thread to stall for another.
-
-### 2. ID-as-a-Pointer (Zero String Hashing)
-Latte uses `const char*` IDs so identification is based on the pointer value (address), avoiding string hashing and string comparisons. IDs are used as keys (e.g., `std::map<const char*, RingBuffer>`); comparisons are pointer comparisons, and lookup cost scales as `O(log N)` with the number of distinct IDs on the thread.
-
-**Important:** IDs are compared by pointer value, not by string contents. Only use:
-- string literals: `"MyComponent"`
-- stable static storage: `static const char name[] = "MyComponent";`
-
-Do **not** pass temporary `std::string::c_str()` pointers or stack buffers.
-
-
-### 3. Stack-Based Capturing (Nesting support)
-To support deep nesting without linear search overhead, Latte utilizes a per-thread SoA stack.
-* `Start()` pushes the ID, timestamp, and capture Mode (Fast/Mid/Hard) to the stack index.
-* `Stop()` pops the top of the stack, calculates the cycle delta, and carries the start/stop Modes into calibration selection.
-
-This keeps Start/Stop overhead stable with nesting (up to the fixed maximum depth).
-
-### 4. Map lookups on `Stop()`
-
-Each thread owns a `ThreadStorage` that keeps per-ID history in an ordered map:
-
-- `std::map<const char*, RingBuffer> history`
-
-On `Stop()`, Latte looks up the ring buffer for the ID in that map (`O(log N)` pointer comparisons) and pushes the measured cycle delta into the buffer.
-
-Notes:
-- Keys are compared by **address** (`const char*`), so there is **no string hashing** and no `strcmp`.
-- The container is still a tree (`std::map`), so lookup scales as `O(log N)` with the number of distinct IDs on the thread.
-
-### 5. Cache-Line Alignment & SoA
-To prevent "False Sharing" and maximize CPU pre-fetcher efficiency, internal buffers are aligned to 64-byte boundaries `(alignas(64))`. The use of **Structure of Arrays** instead of Arrays of Structs ensures that only relevant timing data is pulled into the **L1 cache**, preventing unnecessary memory bandwidth usage.
-
-### 6. Hardware-Level Timing
-Latte provides three levels of precision by wrapping x86 intrinsics directly:
-* **Fast (RDTSC):** Lowest overhead. Non-serializing; suitable for general logic.
-* **Mid (RDTSCP):** More ordered than RDTSC.
-* **Hard (LFENCE + RDTSCP):** More serialized; forces stronger ordering.
-
----
-
-## Statistical Analysis
-Latte provides insights into the distribution of latency, focusing on long-tail behavior:
-* **Average**
-* **Median**
-* **Standard Deviation**
-* **Skewness**
-* **Min**
-* **Max**
-* **Range (Δ)** 
-* **BYPASS** number of filtered samples classified as OS bypass
-
-
-### Data cleaning
-
-Before computing report statistics, `DumpToStream()` runs `Internal::CleanData` over the collected samples for each `(thread, id)`. The cleaning pass:
-
-- **Buckets samples** into groups of 1 000, records the maximum of each bucket.
-- Calculates an **IQR (interquartile range) on the bucket maxima** to determine a cutoff.
-- Samples **above the cutoff** are counted as `OUTLIER` and excluded from statistics.
-- Remaining samples are sorted and used for median, mean, stddev, skew, min, max, and range.
-
-> *This bucket‑max IQR method is more robust against long‑tail outliers than a raw IQR.*
-
-
-```ascii
-#==============================================================================================================#
-| LATTE TELEMETRY [TIME][CAL]                                                                                  |
-#==============================================================================================================#
-| OVERHEAD H[Start] x W[Stop]                                                                                  |
-|                        F             M             H                                                         |
-| F                0.21 ns      10.02 ns      10.02 ns                                                         |
-| M                0.21 ns      10.02 ns      10.02 ns                                                         |
-| H                0.21 ns      10.02 ns      10.02 ns                                                         |
-| PULSE           10.02 ns                                                                                     |
-|--------------------------------------------------------------------------------------------------------------|
-| COMPONENT             SAMPLES       AVG    MEDIAN   STD DEV    SKEW       MIN       MAX     RANGE    OUTLIER |
-|--------------------------------------------------------------------------------------------------------------|
-| DP_Build_Total              1   38.07 s   38.07 s   0.00 ns    0.00   38.07 s   38.07 s   0.00 ns         0  |
-| DP_StateLoop            65536  31.15 us  30.96 us   1.42 us   12.13  29.32 us  95.10 us  65.78 us         0  |
-| Sim_Tick_Total           4997 226.79 ns 220.42 ns  76.04 ns    1.40 110.21 ns 821.55 ns 711.34 ns         3  |
-| Sim_OrderFlow            4997  43.62 ns  29.63 ns  36.61 ns    2.02   9.59 ns 380.51 ns 370.91 ns         3  |
-| Sim_AskLoop              1216   1.03 us 711.34 ns   1.06 us    2.14   0.00 ns   8.30 us   8.30 us         0  |
-| Sim_BidLoop              1247   1.12 us 751.42 ns   4.21 us   32.56   0.00 ns 145.96 us 145.96 us         0  |
-| Sim_RiskPnL              5000   6.24 ns   9.59 ns   4.67 ns   -0.57   0.00 ns  19.82 ns  19.82 ns         0  |
-#==============================================================================================================#
-```
-> *The `OVERHEAD` table shows the measured **instrumentation overhead** (in cycles or time) for every combination of `Start` mode (row) and `Stop` mode (column). For example, `F -> M` is the overhead of a `Fast::Start` followed by a `Mid::Stop`; `PULSE` is independent. These values are automatically subtracted when `Parameter::Calibrated` is used.*
----
-
 ## Implementation Guide
 
 ### 1. Integration
@@ -149,7 +53,7 @@ Latte::Fast::Stop("Frame_Total");
 ```cpp
 for (;;) {
     // ... poll / process ...
-    LATTE_PULSE("Poll_Loop_Delta");
+    LATTE_PULSE("Toroidal_Record");
 }
 ```
 
@@ -157,7 +61,7 @@ for (;;) {
 `Snapshot("ID")` returns raw cycle samples collected so far for a given ID, aggregated across threads.
 
 ```cpp
-std::vector<Latte::Cycles> samples = Latte::Snapshot("Physics_Engine");
+std::vector<Latte::Cycles> samples = Latte::Snapshot("Physics_Engine"); // vec<uint64_t>
 ```
 
 ### 6. Report generation: `DumpToStream`
@@ -192,6 +96,56 @@ Calibration and overhead:
 Mixed-mode calibration:
 - The per-thread stack stores the capture Mode (Fast/Mid/Hard) alongside the timestamp.
 - On `Stop()`, calibration/overhead selection is keyed by the `(start_mode, stop_mode)` pair (e.g., Fast×Fast, Fast×Mid, Hard×Mid).
+
+---
+
+## Statistical Analysis
+Latte provides insights into the distribution of latency, focusing on long-tail behavior:
+* **Average**
+* **Median**
+* **Standard Deviation**
+* **Skewness**
+* **Min**
+* **Max**
+* **Range (Δ)** 
+* **OUTLIER** number of filtered samples classified as outlier from IQR
+
+
+### Data cleaning
+
+Before computing report statistics, `DumpToStream()` runs `Internal::CleanData` over the collected samples for each `(thread, id)`. The cleaning pass:
+
+- **Buckets samples** into groups of 1 000, records the maximum of each bucket.
+- Calculates an **IQR (interquartile range) on the bucket maxima** to determine a cutoff.
+- Samples **above the cutoff** are counted as `OUTLIER` and excluded from statistics.
+- Remaining samples are sorted and used for median, mean, stddev, skew, min, max, and range.
+
+> *This bucket‑max IQR method is more robust against long‑tail outliers than a raw IQR.*
+
+
+```ascii
+#==============================================================================================================#
+| LATTE TELEMETRY [TIME][CAL]                                                                                  |
+#==============================================================================================================#
+| OVERHEAD H[Start] x W[Stop]                                                                                  |
+|                        F             M             H                                                         |
+| F                0.21 ns      10.02 ns      10.02 ns                                                         |
+| M                0.21 ns      10.02 ns      10.02 ns                                                         |
+| H                0.21 ns      10.02 ns      10.02 ns                                                         |
+| PULSE           10.02 ns                                                                                     |
+|--------------------------------------------------------------------------------------------------------------|
+| COMPONENT             SAMPLES       AVG    MEDIAN   STD DEV    SKEW       MIN       MAX     RANGE    OUTLIER |
+|--------------------------------------------------------------------------------------------------------------|
+| DP_Build_Total              1   38.07 s   38.07 s   0.00 ns    0.00   38.07 s   38.07 s   0.00 ns         0  |
+| DP_StateLoop            65536  31.15 us  30.96 us   1.42 us   12.13  29.32 us  95.10 us  65.78 us         0  |
+| Sim_Tick_Total           4997 226.79 ns 220.42 ns  76.04 ns    1.40 110.21 ns 821.55 ns 711.34 ns         3  |
+| Sim_OrderFlow            4997  43.62 ns  29.63 ns  36.61 ns    2.02   9.59 ns 380.51 ns 370.91 ns         3  |
+| Sim_AskLoop              1216   1.03 us 711.34 ns   1.06 us    2.14   0.00 ns   8.30 us   8.30 us         0  |
+| Sim_BidLoop              1247   1.12 us 751.42 ns   4.21 us   32.56   0.00 ns 145.96 us 145.96 us         0  |
+| Sim_RiskPnL              5000   6.24 ns   9.59 ns   4.67 ns   -0.57   0.00 ns  19.82 ns  19.82 ns         0  |
+#==============================================================================================================#
+```
+> *The `OVERHEAD` table shows the measured **instrumentation overhead** (in cycles or time) for every combination of `Start` mode (row) and `Stop` mode (column). For example, `F -> M` is the overhead of a `Fast::Start` followed by a `Mid::Stop`; `PULSE` is independent. These values are automatically subtracted when `Parameter::Calibrated` is used.*
 
 ---
 
@@ -233,13 +187,59 @@ Latte uses a per-thread stack to support nesting:
 
 Sampling (`Start/Stop` and `LATTE_PULSE`) is designed for low contention by using per-thread storage.
 
-However **`DumpToStream` and `Snapshot` are NOT safe to call concurrently with active sampling threads.**
+**However `DumpToStream` and `Snapshot` are NOT safe to call concurrently with active sampling threads.**
 - The manager’s mutex only protects the global list of `ThreadStorage` pointers – **it does not synchronise access to the ring buffers** or the per‑thread `history` map.
 - Writes (from `Start`/`Stop`/`LATTE_PULSE`) are performed without locks or atomics for maximum speed.
 - Concurrent reads while writes happen on the same thread or another thread cause **data races** (undefined behaviour).
 
 **Recommended usage:** Call `DumpToStream` / `Snapshot` only after all worker threads have stopped instrumenting (e.g., after joining threads, or after a barrier that guarantees no `Start`/`Stop` is in flight).
 
+---
+
+## Key Optimization Principles
+
+Latte is engineered to solve the "Observer Effect," ensuring that the act of measurement does not significantly distort the performance of the system being observed.
+
+### 1. Zero Contention (Thread Local Storage)
+Standard profiling tools often utilize global mutexes or atomic counters that cause cache line contention between CPU cores. Latte utilizes `thread_local` storage. Each thread records data into its own private buffers, ensuring that measurement never forces one thread to stall for another.
+
+### 2. ID-as-a-Pointer (Zero String Hashing)
+Latte uses `const char*` IDs so identification is based on the pointer value (address), avoiding string hashing and string comparisons. IDs are used as keys (e.g., `std::map<const char*, RingBuffer>`); comparisons are pointer comparisons, and lookup cost scales as `O(log N)` with the number of distinct IDs on the thread.
+
+**Important:** IDs are compared by pointer value, not by string contents. Only use:
+- string literals: `"MyComponent"`
+- stable static storage: `static const char name[] = "MyComponent";`
+
+Do **not** pass temporary `std::string::c_str()` pointers or stack buffers.
+
+
+### 3. Stack-Based Capturing (Nesting support)
+To support deep nesting without linear search overhead, Latte utilizes a per-thread SoA stack.
+* `Start()` pushes the ID, timestamp, and capture Mode (Fast/Mid/Hard) to the stack index.
+* `Stop()` pops the top of the stack, calculates the cycle delta, and carries the start/stop Modes into calibration selection.
+
+This keeps Start/Stop overhead stable with nesting (up to the fixed maximum depth).
+
+### 4. Map lookups on `Stop()`
+
+Each thread owns a `ThreadStorage` that keeps per-ID history in an ordered map:
+
+- `std::map<const char*, RingBuffer> history`
+
+On `Stop()`, Latte looks up the ring buffer for the ID in that map (`O(log N)` pointer comparisons) and pushes the measured cycle delta into the buffer.
+
+Notes:
+- Keys are compared by **address** (`const char*`), so there is **no string hashing** and no `strcmp`.
+- The container is still a tree (`std::map`), so lookup scales as `O(log N)` with the number of distinct IDs on the thread.
+
+### 5. Cache-Line Alignment & SoA
+To prevent "False Sharing" and maximize CPU pre-fetcher efficiency, internal buffers are aligned to 64-byte boundaries `(alignas(64))`. The use of **Structure of Arrays** instead of Arrays of Structs ensures that only relevant timing data is pulled into the **L1 cache**, preventing unnecessary memory bandwidth usage.
+
+### 6. Hardware-Level Timing
+Latte provides three levels of precision by wrapping x86 intrinsics directly:
+* **Fast (RDTSC):** Lowest overhead. Non-serializing; suitable for general logic.
+* **Mid (RDTSCP):** More ordered than RDTSC.
+* **Hard (LFENCE + RDTSCP):** More serialized; forces stronger ordering.
 ---
 
 ## Requirements and Constraints
