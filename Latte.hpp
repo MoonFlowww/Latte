@@ -312,7 +312,7 @@ inline constexpr ModeAPI MODE_TABLE[3] = {
  
 inline void Manager::Calibrate() {
   {LATTE_FREQ(cycles_per_ns);}
-  // PERMUTATION OVERHEAD
+  // PERMUTATION SELF-OFFSET
   constexpr int WARMUP_ITERS = 10000; // naturally overwrite by circular buffer
   const int iters = (int)MAX_SAMPLES + WARMUP_ITERS;
 
@@ -340,7 +340,7 @@ inline void Manager::Calibrate() {
     }
   }
 
-  // PULSE OVERHEAD
+  // PULSE SELF-OFFSET
   for (volatile int i = 0; i < iters; ++i) {
     Internal::LFENCE();
     Latte::Fast::Start(Internal::CALIB_PULSE);
@@ -533,7 +533,7 @@ inline void DumpToStream(std::ostream& oss, Parameter::Unit unit = Parameter::Cy
   oss << gray("#") << gray(d_line) << gray("#") << "\n";
 
 
-  // Removing overhead measured by your Latte-calls themself (noise)
+  // Removing self-offset measured by your Latte-calls themself (noise)
   if (data_mode == Parameter::Calibrated) {
     auto off_str = [&](uint8_t sm, uint8_t em) -> std::string {
       const uint8_t k = Internal::CalibKey(sm, em);
@@ -559,7 +559,7 @@ inline void DumpToStream(std::ostream& oss, Parameter::Unit unit = Parameter::Cy
 
     const std::string END(82, ' ');
 
-    write_row({col("OVERHEAD H[Start] x W[Stop]", TABLE_WIDTH - 2, true)});
+    write_row({col("SELF-OFFSET H[Start] x W[Stop]", TABLE_WIDTH - 2, true)});
     write_row({mcol("", 10, true) + mcol("F", MW) + mcol("M", MW) + mcol("H", MW) + END});
     write_row({mcol("F", 10, true) + mcol(off_str(F, F), MW) + mcol(off_str(F, M), MW) + mcol(off_str(F, H), MW) + END});
     write_row({mcol("M", 10, true) + mcol(off_str(M, F), MW) + mcol(off_str(M, M), MW) + mcol(off_str(M, H), MW) + END});
