@@ -172,7 +172,9 @@ int main() {
 
   auto r_chrono = BENCHMARK("std::chrono::now()", {
     auto t1 = std::chrono::high_resolution_clock::now();
-    auto cd = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - t1).count();
+    auto t2 = std::chrono::high_resolution_clock::now();
+    auto cd = std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();
+    do_not_optimize(cd);
   });
   PrintResult(*r_chrono, r_baseline->med);
   std::cout << "+-------------------------+----------+----------+----------+----------+----------+----------+----------+" << std::endl;

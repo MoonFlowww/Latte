@@ -1,5 +1,8 @@
 #pragma once
 #pragma GCC optimize ("O3")
+
+#ifndef LATTE_DISABLE
+
 #include <vector>
 #include <string>
 #include <map>
@@ -66,7 +69,7 @@ struct Intrinsic {
   __attribute__((always_inline)) static inline Cycles RDTSC() { return __rdtsc(); }
   __attribute__((always_inline)) static inline Cycles RDTSCP() { unsigned int aux; return __rdtscp(&aux); }
   __attribute__((always_inline)) static inline Cycles LFENCE_RDTSCP() { _mm_lfence(); unsigned int aux; return __rdtscp(&aux); } // start
-  __attribute__((always_inline)) static inline Cycles RDTSCP_LFENCE() { unsigned int aux; Cycles result = __rdtscp(&aux); _mm_lfence(); return result } // stop
+  __attribute__((always_inline)) static inline Cycles RDTSCP_LFENCE() { unsigned int aux; Cycles result = __rdtscp(&aux); _mm_lfence(); return result; } // stop
 };
 
 enum class Mode : uint8_t { Fast = 0, Mid = 1, Hard = 2 };
@@ -585,7 +588,7 @@ inline void DumpToStream(std::ostream& oss, Parameter::Unit unit = Parameter::Cy
     if (series.values.empty()) continue;
 
 
-    std::vector<double> adjusted; // noise removal
+    std::vector<double> adjusted; // noise filtering
     adjusted.reserve(series.values.size());
 
     const double off = (data_mode == Parameter::Calibrated) ? (double)mgr.CalibrationOffset(series.calib_key) : 0.0;
@@ -596,7 +599,6 @@ inline void DumpToStream(std::ostream& oss, Parameter::Unit unit = Parameter::Cy
       adjusted.push_back(x);
     }
 
-    // user-extracted cleaning function
     Internal::CleanResult clean = Internal::CleanData(adjusted);
     std::vector<double>& clean_values = clean.values;
     size_t outlier_count = clean.outlier;
@@ -645,5 +647,52 @@ inline void DumpToStream(std::ostream& oss, Parameter::Unit unit = Parameter::Cy
 
 }
 
-//once
+
 #define LATTE_CALIBRATE() do { Latte::Manager::Get().EnsureCalibrated(); } while(0)
+
+#else // LATTE_DISABLE defined
+#include <ostream>
+#include <vector>
+#include <string>
+
+#define LATTE_PULSE(id_str) do {} while(0)
+#define LATTE_FREQ(cycles_per_ns) do {} while(0)
+#define LATTE_CALIBRATE() do {} while(0)
+
+namespace Latte{
+  using ID = const char*;
+  using Cycles = uint64_t;
+
+  namespace Fast {
+    inline void Start(ID) {}
+    inline void Stop(ID) {}
+    }
+  namespace Mid { 
+    inline void Start(ID) {} 
+    inline void Stop(ID) {} 
+  }
+  
+  namespace Hard { 
+    inline void Start(ID) {} 
+    inline void Stop(ID) {} 
+  }
+  
+  namespace Parameter {
+    enum Unit { Cycle, Time };
+    enum Data { Raw, Calibrated };
+  }
+  
+  namespace Internal {
+    struct CleanResult {
+      std::vector<double> values;
+      size_t outlier = 0;
+      double cutoff = 0.0;
+    };
+  }
+  
+  inline std::vector<Cycles> Snapshot(ID) { return {}; }
+  inline std::string FormatTime(double) { return ""; }
+  inline Internal::CleanResult DataClean(const std::vector<double>&) { return {}; }
+  inline void DumpToStream(std::ostream&, Parameter::Unit = Parameter::Cycle, Parameter::Data = Parameter::Raw) {}
+}
+#endif // LATTE_DISABLE
