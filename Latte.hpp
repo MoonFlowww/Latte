@@ -65,7 +65,8 @@ constexpr size_t BUFFER_MASK = MAX_SAMPLES - 1;
 struct Intrinsic {
   __attribute__((always_inline)) static inline Cycles RDTSC() { return __rdtsc(); }
   __attribute__((always_inline)) static inline Cycles RDTSCP() { unsigned int aux; return __rdtscp(&aux); }
-  __attribute__((always_inline)) static inline Cycles RDTSCP_LFENCE() { _mm_lfence(); unsigned int aux; return __rdtscp(&aux); }
+  __attribute__((always_inline)) static inline Cycles LFENCE_RDTSCP() { _mm_lfence(); unsigned int aux; return __rdtscp(&aux); } // start
+  __attribute__((always_inline)) static inline Cycles RDTSCP_LFENCE() { unsigned int aux; return __rdtscp(&aux); _mm_lfence(); } // stop
 };
 
 enum class Mode : uint8_t { Fast = 0, Mid = 1, Hard = 2 };
@@ -294,7 +295,7 @@ struct Recorder {
 };
 namespace Fast { inline void Start(ID id) { Recorder<Mode::Fast, Intrinsic::RDTSC>::Start(id); } inline void Stop(ID id) { Recorder<Mode::Fast, Intrinsic::RDTSC>::Stop(id); } }
 namespace Mid  { inline void Start(ID id) { Recorder<Mode::Mid, Intrinsic::RDTSCP>::Start(id); } inline void Stop(ID id) { Recorder<Mode::Mid, Intrinsic::RDTSCP>::Stop(id); } }
-namespace Hard { inline void Start(ID id) { Recorder<Mode::Hard, Intrinsic::RDTSCP_LFENCE>::Start(id); } inline void Stop(ID id) { Recorder<Mode::Hard, Intrinsic::RDTSCP_LFENCE>::Stop(id); } }
+namespace Hard { inline void Start(ID id) { Recorder<Mode::Hard, Intrinsic::LFENCE_RDTSCP>::Start(id); } inline void Stop(ID id) { Recorder<Mode::Hard, Intrinsic::RDTSCP_LFENCE>::Stop(id); } } //Paolini/Intel paper Start(LFENCE->rdtscp) and Stop(rdtscp->LFENCE)
 
 
 struct ModeAPI {
