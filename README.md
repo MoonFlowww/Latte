@@ -3,7 +3,7 @@
 Latte is a header-only C++ telemetry library designed for high‑frequency trading, game engines, and real‑time systems where measurement overhead must be measured in nanoseconds rather than microseconds.
 Latte measures **CPU cycles** using x86_64 timestamp counters (RDTSC / RDTSCP) and stores samples in **per‑thread fixed‑size ring buffers** for later reporting.
 
-> *No dynamic allocations occur during `Start`/`Stop` – only lock‑free per‑thread storage.*
+> *Zero allocations in steady state. The first `Start(id)` per thread allocates a ring buffer entry in the per-thread map; all subsequent calls to the same ID are allocation-free and lock-free.*
 
 ---
 
@@ -33,8 +33,8 @@ Latte provides three levels of timing precision. They differ in **ordering guara
 | Mode   | Intrinsic(s)            | Serialization        | Best for |
 |--------|-------------------------|----------------------|-----------|
 | `Fast` | `__rdtsc()`             | None                 | Coarse, high‑frequency polling where every cycle matters (e.g., Hot Path). |
-| `Mid`  | `__rdtscp()`            | Read serialization   | Default for function‑level profiling, balanced accuracy and overhead. |
-| `Hard` | `lfence` + `__rdtscp()` | Full (LFENCE + serialize) | Measuring tiny snippets (few dozen cycles) or when out‑of‑order execution could distort deltas. |
+| `Mid`  | `__rdtscp()`            | Partial barrier (waits on prior instructions only)   | Default for function‑level profiling, balanced accuracy and overhead. |
+| `Hard` | `lfence` + `__rdtscp()` and `__rdtscp()`  + `lfence` | Full (LFENCE + serialize) | Measuring tiny snippets (few dozen cycles) or when out‑of‑order execution could distort deltas. |
 
 
 ### 3. Nested monitoring
@@ -139,7 +139,7 @@ Before computing report statistics, `DumpToStream()` runs `Internal::CleanData` 
 #==============================================================================================================#
 | LATTE TELEMETRY [TIME][CAL]                                                                                  |
 #==============================================================================================================#
-| OVERHEAD H[Start] x W[Stop]                                                                                  |
+| SELF-OFFSET H[Start] x W[Stop]                                                                               |
 |                        F             M             H                                                         |
 | F                0.21 ns      10.02 ns      10.02 ns                                                         |
 | M                0.21 ns      10.02 ns      10.02 ns                                                         |
@@ -157,7 +157,7 @@ Before computing report statistics, `DumpToStream()` runs `Internal::CleanData` 
 | Sim_RiskPnL              5000   6.24 ns   9.59 ns   4.67 ns   -0.57   0.00 ns  19.82 ns  19.82 ns         0  |
 #==============================================================================================================#
 ```
-> *The `OVERHEAD` table shows the measured **instrumentation overhead** (in cycles or time) for every combination of `Start` mode (row) and `Stop` mode (column). For example, `F -> M` is the overhead of a `Fast::Start` followed by a `Mid::Stop`; `PULSE` is independent. These values are automatically subtracted when `Parameter::Calibrated` is used.*
+> *The `SELF-OFFSET` table shows what Latte measures when `Start` and `Stop` are called back-to-back with no work between them (function call overhead only). Row = Start mode, Column = Stop mode. These values are automatically subtracted when using `Parameter::Calibrated`.*
 
 ---
 
@@ -298,7 +298,7 @@ The intrinsics headers are already handled: `<intrin.h>` for MSVC, `<x86intrin.h
 |:-----------------|-------------:|----------------:|----------------:|-------------:|-------------:|-------------------:|
 | Fast::Start+Stop | 60.1         | 60.0            | 0.1             | 59.9         | 60.4         | 0.5                |
 | Mid::Start+Stop  | 119.8        | 119.7           | 0.4             | 119.9        | 122.7        | 2.8                |
-| Hard::Start+Stop | 148.5        | 148.4           | 0.5             | 147.9        | 150.4        | 2.5                |
+| Hard::Start+Stop | 175.8        | 175.4           | 0.9             | 175.4        | 179.3        | 3.9                |
 | LATTE_PULSE      | 29.9         | 29.8            | 0.1             | 29.7         | 30.3         | 0.6                |
 
 ### **Chrono**
