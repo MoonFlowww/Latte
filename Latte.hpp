@@ -534,6 +534,14 @@ inline void DumpToStream(std::ostream& oss, Parameter::Unit unit = Parameter::Cy
 
 } // namespace Latte
 
+
+
+#define LATTE_FAST_START(id) Latte::Fast::Start(id)
+#define LATTE_FAST_STOP(id)  Latte::Fast::Stop(id)
+#define LATTE_MID_START(id)  Latte::Mid::Start(id)
+#define LATTE_MID_STOP(id)   Latte::Mid::Stop(id)
+#define LATTE_HARD_START(id) Latte::Hard::Start(id)
+#define LATTE_HARD_STOP(id)  Latte::Hard::Stop(id)
 #define LATTE_CALIBRATE() do { Latte::Manager::Get().EnsureCalibrated(); } while(0)
 
 #else // LATTE_DISABLE
@@ -542,9 +550,15 @@ inline void DumpToStream(std::ostream& oss, Parameter::Unit unit = Parameter::Cy
 #include <vector>
 #include <string>
 
-#define LATTE_PULSE(id_str)       do {} while(0)
+#define LATTE_PULSE(id_str)      do {} while(0)
 #define LATTE_FREQ(cycles_per_ns) do {} while(0)
-#define LATTE_CALIBRATE()         do {} while(0)
+#define LATTE_CALIBRATE()        do {} while(0)
+#define LATTE_FAST_START(id)     do {} while(0)
+#define LATTE_FAST_STOP(id)      do {} while(0)
+#define LATTE_MID_START(id)      do {} while(0)
+#define LATTE_MID_STOP(id)       do {} while(0)
+#define LATTE_HARD_START(id)     do {} while(0)
+#define LATTE_HARD_STOP(id)      do {} while(0)
 
 namespace Latte {
   using ID = const char*;
