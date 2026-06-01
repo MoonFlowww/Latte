@@ -1,6 +1,6 @@
 # ☕️ Latte: Ultra-Low Latency C++ Telemetry Framework
 ![GitHub last commit](https://img.shields.io/github/last-commit/MoonFlowww/Latte?logo=github)
-![Unique Cloners](https://img.shields.io/badge/Unique_Cloners-96-blue?logo=github)
+![Unique Cloners](https://img.shields.io/badge/Unique_Cloners-104-blue?logo=github)
 
 Latte is a header-only C++ telemetry library designed for high‑frequency trading, game engines, and real‑time systems where measurement overhead must be measured in nanoseconds rather than microseconds.
 Latte measures **CPU cycles** using x86_64 timestamp counters (RDTSC / RDTSCP) and stores samples in **per‑thread fixed‑size ring buffers** for later reporting.
