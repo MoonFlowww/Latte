@@ -1,0 +1,46 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "title": "Latte Latency Timeline (icicle / flame view)",
+  "width": 900,
+  "height": 160,
+  "data": {"url": "dump.json"},
+  "transform": [
+    {"calculate": "datum.start_ns + datum.duration_ns", "as": "end_ns"}
+  ],
+  "params": [
+    {"name": "pan_zoom", "select": "interval", "bind": "scales"}
+  ],
+  "mark": {"type": "rect", "stroke": "white", "strokeWidth": 0.5},
+  "encoding": {
+    "x": {
+      "field": "start_ns",
+      "type": "quantitative",
+      "title": "Time (ns, since first instrumented call)",
+      "scale": {"zero": false}
+    },
+    "x2": {"field": "end_ns"},
+    "y": {
+      "field": "depth",
+      "type": "ordinal",
+      "title": "Nesting depth",
+      "sort": "ascending"
+    },
+    "color": {
+      "field": "component",
+      "type": "nominal",
+      "title": "Component",
+      "scale": {"scheme": "category20b"},
+      "legend": {"orient": "right", "columns": 1}
+    },
+    "tooltip": [
+      {"field": "component", "type": "nominal", "title": "Component"},
+      {"field": "depth", "type": "ordinal", "title": "Depth"},
+      {"field": "start_ns", "type": "quantitative", "title": "Start (ns)", "format": ",.1f"},
+      {"field": "duration_ns", "type": "quantitative", "title": "Duration (ns)", "format": ",.2f"}
+    ]
+  },
+  "config": {
+    "view": {"stroke": null},
+    "axis": {"domainWidth": 1}
+  }
+}

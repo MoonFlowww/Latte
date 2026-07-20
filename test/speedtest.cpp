@@ -180,6 +180,5 @@ int main() {
   std::cout << "+-------------------------+----------+----------+----------+----------+----------+----------+----------+" << std::endl;
 
   Latte::DumpToStream(std::cout, Latte::Parameter::Cycle, Latte::Parameter::Calibrated);
-
   return 0;
 }
