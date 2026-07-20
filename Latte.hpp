@@ -1,4 +1,6 @@
 #pragma once
+#include <fstream>
+#include <ios>
 #pragma GCC optimize ("O3")
 
 #ifndef LATTE_DISABLE
@@ -247,6 +249,22 @@ public:
     return output;
   }
 
+  std::map<ID, std::vector<Cycles>> ExtractRawGlobal() {
+    std::map<ID, std::vector<Cycles>> global_data;
+    std::lock_guard<std::mutex> lock(mutex);
+
+    for (auto* ts : thread_buffers) {
+      for (auto& [id, buffer] : ts->history) {
+        std::vector<Cycles>& vec = global_data[id];
+
+        for (size_t i = 0; i < MAX_SAMPLES; ++i) {
+          if (buffer.data[i] > 0) vec.push_back(buffer.data[i]);
+        }
+      }
+    }
+    return global_data;
+  }
+
   void Calibrate(); //scroll down
 
 private:
@@ -302,17 +320,17 @@ namespace Hard { inline void Start(ID id) { Recorder<Mode::Hard, Intrinsic::LFEN
 
 
 struct ModeAPI {
-    void (*start)(ID);
-    void (*stop)(ID);
-    const char* name;
+  void (*start)(ID);
+  void (*stop)(ID);
+  const char* name;
 };
 
 inline constexpr ModeAPI MODE_TABLE[3] = {
-    {Fast::Start, Fast::Stop, "Fast"},
-    {Mid::Start,  Mid::Stop,  "Mid"},
-    {Hard::Start, Hard::Stop, "Hard"}
+  {Fast::Start, Fast::Stop, "Fast"},
+  {Mid::Start,  Mid::Stop,  "Mid"},
+  {Hard::Start, Hard::Stop, "Hard"}
 };
- 
+
 inline void Manager::Calibrate() {
   {LATTE_FREQ(cycles_per_ns);}
   // PERMUTATION SELF-OFFSET
@@ -427,6 +445,7 @@ inline std::vector<Cycles> Snapshot(ID id) {
   return Manager::Get().ExtractRaw(id);
 }
 
+
 inline std::string FormatTime(double ns) {
   std::stringstream ss;
   ss << std::fixed << std::setprecision(2);
@@ -476,6 +495,7 @@ inline void DumpToStream(std::ostream& oss, Parameter::Unit unit = Parameter::Cy
       }
     }
   }
+
 
   auto FormatLarge = [](double val) {
     const char* units[] = {"", "K", "M", "B", "T"};
@@ -645,6 +665,37 @@ inline void DumpToStream(std::ostream& oss, Parameter::Unit unit = Parameter::Cy
 }
 
 
+inline void DumpToJson(const std::string& path) {
+  Manager& mgr = Manager::Get();
+  mgr.EnsureCalibrated();
+
+  auto raw_data = mgr.ExtractRawGlobal();
+
+  std::ofstream file(path);
+  file << std::fixed << std::setprecision(2);
+  file << "[\n";  // Start array for Vega-Lite
+
+  bool first_row = true;
+  for (auto& [id, cycles_vec] : raw_data) {
+    if (cycles_vec.empty()) continue;
+
+    // Convert cycles to nanoseconds
+    for (size_t idx = 0; idx < cycles_vec.size(); ++idx) {
+      if (!first_row) file << ",\n";
+      first_row = false;
+
+      double ns = cycles_vec[idx] / mgr.cycles_per_ns;
+
+      file << "  {\n";
+      file << "    \"component\": \"" << id << "\",\n";
+      file << "    \"sample_index\": " << idx << ",\n";
+      file << "    \"duration_ns\": " << ns << "\n";
+      file << "  }";
+    }
+  }
+  file << "\n]\n";
+}
+
 }
 
 
@@ -661,39 +712,40 @@ inline void DumpToStream(std::ostream& oss, Parameter::Unit unit = Parameter::Cy
 #define LATTE_CALIBRATE() do {} while(0)
 
 namespace Latte{
-  using ID = const char*;
-  using Cycles = uint64_t;
+using ID = const char*;
+using Cycles = uint64_t;
 
-  namespace Fast {
-    inline void Start(ID) {}
-    inline void Stop(ID) {}
+namespace Fast {
+inline void Start(ID) {}
+inline void Stop(ID) {}
     }
-  namespace Mid { 
-    inline void Start(ID) {} 
-    inline void Stop(ID) {} 
+namespace Mid { 
+inline void Start(ID) {} 
+inline void Stop(ID) {} 
   }
-  
-  namespace Hard { 
-    inline void Start(ID) {} 
-    inline void Stop(ID) {} 
+
+namespace Hard { 
+inline void Start(ID) {} 
+inline void Stop(ID) {} 
   }
-  
-  namespace Parameter {
-    enum Unit { Cycle, Time };
-    enum Data { Raw, Calibrated };
+
+namespace Parameter {
+enum Unit { Cycle, Time };
+enum Data { Raw, Calibrated };
   }
-  
-  namespace Internal {
-    struct CleanResult {
-      std::vector<double> values;
-      size_t outlier = 0;
-      double cutoff = 0.0;
-    };
+
+namespace Internal {
+struct CleanResult {
+  std::vector<double> values;
+  size_t outlier = 0;
+  double cutoff = 0.0;
+};
   }
-  
-  inline std::vector<Cycles> Snapshot(ID) { return {}; }
-  inline std::string FormatTime(double) { return ""; }
-  inline Internal::CleanResult DataClean(const std::vector<double>&) { return {}; }
-  inline void DumpToStream(std::ostream&, Parameter::Unit = Parameter::Cycle, Parameter::Data = Parameter::Raw) {}
+
+inline std::vector<Cycles> Snapshot(ID) { return {}; }
+inline std::string FormatTime(double) { return ""; }
+inline Internal::CleanResult DataClean(const std::vector<double>&) { return {}; }
+inline void DumpToStream(std::ostream&, Parameter::Unit = Parameter::Cycle, Parameter::Data = Parameter::Raw) {}
+inline void DumpToJson(const std::string& path) { (void)path; }
 }
 #endif // LATTE_DISABLE

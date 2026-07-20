@@ -1,0 +1,39 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "title": "Latte Latency Distribution by Component",
+  "width": {"step": 36},
+  "height": 400,
+  "data": {"url": "dump.json"},
+  "mark": {
+    "type": "boxplot",
+    "size": 20
+  },
+  "encoding": {
+    "x": {
+      "field": "component",
+      "type": "nominal",
+      "title": "Component",
+      "axis": {"labelAngle": -40}
+    },
+    "y": {
+      "field": "duration_ns",
+      "type": "quantitative",
+      "title": "Duration (ns, log scale)",
+      "scale": {"type": "log"}
+    },
+    "color": {
+      "field": "component",
+      "type": "nominal",
+      "legend": null,
+      "scale": {"scheme": "category20b"}
+    },
+    "tooltip": [
+      {"field": "component", "type": "nominal", "title": "Component"},
+      {"field": "duration_ns", "type": "quantitative", "title": "Duration (ns)", "format": ".2f"}
+    ]
+  },
+  "config": {
+    "view": {"stroke": null},
+    "axis": {"domainWidth": 1}
+  }
+}

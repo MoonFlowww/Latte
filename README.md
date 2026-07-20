@@ -111,6 +111,41 @@ Mixed-mode calibration:
 - The per-thread stack stores the capture Mode (Fast/Mid/Hard) alongside the timestamp.
 - On `Stop()`, calibration/overhead selection is keyed by the `(start_mode, stop_mode)` pair (e.g., Fast×Fast, Fast×Mid, Hard×Mid).
 
+### 7. Raw sample export: `DumpToJson`
+Write every collected sample, across all threads and components, as a flat JSON array to a file.
+
+```cpp
+Latte::DumpToJson(const std::string& path);
+```
+
+```cpp
+Latte::DumpToJson("dump.json");
+```
+
+Each element has the shape:
+```json
+{ "component": "Sim_OrderFlow", "sample_index": 42, "duration_ns": 34.72 }
+```
+
+- `sample_index` is the position of the sample **within its own component's series** (0, 1, 2, ...). It is **not** a shared timeline — two samples with the same `sample_index` from different components were not necessarily captured at the same moment. There is currently no start/begin timestamp per sample, only its duration.
+- Samples are **not calibrated**: no overhead subtraction and no `Internal::CleanData` outlier filtering are applied (unlike `DumpToStream`), since the export is meant as raw material for downstream analysis.
+- If `path` cannot be opened for writing (e.g. the parent directory doesn't exist), the call fails silently and no file is produced — check for the file's existence if that matters to your pipeline.
+
+---
+
+## Visualizing latency data
+
+`DumpToJson`'s output only carries `component`, `sample_index`, and `duration_ns` — there is no start/begin timestamp per sample. That rules out any chart that needs to place intervals on a shared time axis (streamgraph, Gantt, stacked-area-over-time): those require both a start and a length, and lining up `sample_index` across components as if it were a synchronized clock would misrepresent the data.
+
+What the export *does* support well is comparing the **distribution** of latency per component — the same statistic `DumpToStream` already reports (median/min/max/outliers), just re-explorable interactively. [`latency.vl.json`](latency.vl.json) is a [Vega-Lite](https://vega.github.io/vega-lite/) boxplot spec that reads `dump.json` directly:
+
+![Latte latency distribution boxplot](latency.png)
+
+- Y-axis is log-scaled: component durations in this run span from ~0.2 ns to ~7 ms, so a linear axis would flatten everything below the DP components.
+- Boxes use Vega-Lite's default Tukey (1.5×IQR) whiskers, with points beyond them drawn individually — the same outlier definition `DumpToStream`'s `OUTLIER` column uses, so the two views agree.
+- Components are plotted flat, side by side. Latte's `Start`/`Stop` calls can nest (e.g. `Sim_Tick_Total` contains `Sim_Impulse`, `Sim_OrderFlow`, ...), but that hierarchy isn't in the exported data yet, so a parent span and its own children currently sit on the same axis as if they were unrelated siblings.
+- Open `latency.vl.json` in the [Vega-Lite Editor](https://vega.github.io/editor/) (or any Vega-Lite-capable viewer) alongside a generated `dump.json` to explore interactively (tooltips, zoom).
+
 ---
 
 ## Statistical Analysis

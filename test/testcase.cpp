@@ -199,7 +199,6 @@ public:
   }
 
   void BuildPolicyDP() {
-    Latte::Hard::Start("DP_Build_Total");
     // Terminal condition: immediate liquidation via market order (cross half-spread + fees)
     // v_T(y,z) = - (half_spread + fee_per_share)*|y| - fee_fixed * 1_{y != 0}
     for (int zi = 0; zi < Z_STATES; ++zi) {
@@ -337,8 +336,6 @@ public:
 
       Latte::Fast::Stop("DP_TimeSlice");
     }
-
-    Latte::Hard::Stop("DP_Build_Total");
   }
 
   // Simulation using the optimal policy computed by DP
@@ -541,5 +538,10 @@ int main() {
   Latte::DumpToStream(std::cout, Latte::Parameter::Time, Latte::Parameter::Raw);
   std::cout << "\n\n" << std::endl;
   Latte::DumpToStream(std::cout, Latte::Parameter::Time, Latte::Parameter::Calibrated);
+  
+
+
+  Latte::DumpToJson("dump.json");
+
   return 0;
 }
