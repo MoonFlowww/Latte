@@ -8,7 +8,7 @@ TEST_DIR := "test"
 
 default: all
 
-all: setup testcase speedtest accuracy
+all: setup testcase speedtest accuracy sanity sanity-disabled
   @echo " All binaries compiled successfully"
 
 setup:
@@ -29,6 +29,16 @@ accuracy: setup
   @echo "-> Compiling accuracy.cpp ..."
   {{CXX}} {{CXXFLAGS}} {{INCLUDE}} {{TEST_DIR}}/accuracy.cpp -o {{BIN_DIR}}/accuracy {{LDFLAGS}}
 
+sanity: setup
+  @echo "-> Compiling sanity.cpp ..."
+  {{CXX}} {{CXXFLAGS}} {{INCLUDE}} {{TEST_DIR}}/sanity.cpp -o {{BIN_DIR}}/sanity {{LDFLAGS}}
+  @echo "Built {{BIN_DIR}}/sanity"
+
+sanity-disabled: setup
+  @echo "-> Compiling sanity.cpp [LATTE_DISABLE] ..."
+  {{CXX}} {{CXXFLAGS}} -DLATTE_DISABLE {{INCLUDE}} {{TEST_DIR}}/sanity.cpp -o {{BIN_DIR}}/sanity_disabled {{LDFLAGS}}
+  @echo "Built {{BIN_DIR}}/sanity_disabled"
+
 
 
 run-test: testcase
@@ -42,9 +52,14 @@ run-speed: speedtest
 run-accuracy: accuracy
   @echo "-> Running accuracy.cpp ..."
   @./{{BIN_DIR}}/accuracy
-  
 
-run: run-speed run-test run-accuracy
+run-sanity: sanity sanity-disabled
+  @echo "-> Running sanity.cpp ..."
+  @./{{BIN_DIR}}/sanity
+  @echo "-> Running sanity.cpp [LATTE_DISABLE] ..."
+  @./{{BIN_DIR}}/sanity_disabled
+
+run: run-speed run-test run-accuracy run-sanity
 
 clean:
   @rm -rf {{BIN_DIR}}
@@ -55,7 +70,8 @@ rebuild: clean all
 check:
   @echo "-> Checking Latte.hpp syntax..."
   {{CXX}} {{CXXFLAGS}} -fsyntax-only Latte.hpp
-  @echo "Header syntax is valid"
+  {{CXX}} {{CXXFLAGS}} -DLATTE_DISABLE -fsyntax-only Latte.hpp
+  @echo "Header syntax is valid (enabled and LATTE_DISABLE)"
 
 info:
   @echo "Compiler: {{CXX}}"

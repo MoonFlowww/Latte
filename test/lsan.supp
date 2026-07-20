@@ -1,0 +1,5 @@
+# Latte::ThreadStorage is a deliberately-never-freed thread_local singleton
+# (lives for the thread's full lifetime by design; freeing it would require
+# thread-exit hooks that aren't worth the hot-path complexity). Everything
+# else should still be caught by LeakSanitizer.
+leak:Latte::GetThreadStorage
