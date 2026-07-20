@@ -1,35 +1,42 @@
 {
   "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
-  "title": "Latte Latency Distribution by Component",
-  "width": {"step": 36},
-  "height": 400,
+  "title": "Latte Latency Timeline (icicle / flame view)",
+  "width": 900,
+  "height": 160,
   "data": {"url": "dump.json"},
-  "mark": {
-    "type": "boxplot",
-    "size": 20
-  },
+  "transform": [
+    {"calculate": "datum.start_ns + datum.duration_ns", "as": "end_ns"}
+  ],
+  "params": [
+    {"name": "pan_zoom", "select": "interval", "bind": "scales"}
+  ],
+  "mark": {"type": "rect", "stroke": "white", "strokeWidth": 0.5},
   "encoding": {
     "x": {
-      "field": "component",
-      "type": "nominal",
-      "title": "Component",
-      "axis": {"labelAngle": -40}
-    },
-    "y": {
-      "field": "duration_ns",
+      "field": "start_ns",
       "type": "quantitative",
-      "title": "Duration (ns, log scale)",
-      "scale": {"type": "log"}
+      "title": "Time (ns, since first instrumented call)",
+      "scale": {"zero": false}
+    },
+    "x2": {"field": "end_ns"},
+    "y": {
+      "field": "depth",
+      "type": "ordinal",
+      "title": "Nesting depth",
+      "sort": "ascending"
     },
     "color": {
       "field": "component",
       "type": "nominal",
-      "legend": null,
-      "scale": {"scheme": "category20b"}
+      "title": "Component",
+      "scale": {"scheme": "category20b"},
+      "legend": {"orient": "right", "columns": 1}
     },
     "tooltip": [
       {"field": "component", "type": "nominal", "title": "Component"},
-      {"field": "duration_ns", "type": "quantitative", "title": "Duration (ns)", "format": ".2f"}
+      {"field": "depth", "type": "ordinal", "title": "Depth"},
+      {"field": "start_ns", "type": "quantitative", "title": "Start (ns)", "format": ",.1f"},
+      {"field": "duration_ns", "type": "quantitative", "title": "Duration (ns)", "format": ",.2f"}
     ]
   },
   "config": {

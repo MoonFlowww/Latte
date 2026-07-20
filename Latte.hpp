@@ -28,13 +28,15 @@
 #define LATTE_PULSE(id_str) \
 do { \
   static thread_local Latte::RingBuffer* _l_rb = nullptr; \
+  static thread_local Latte::ThreadStorage* _l_ts = nullptr; \
   static thread_local uint64_t _l_last = 0; \
   if (__builtin_expect(!_l_rb, 0)) { \
-    _l_rb = Latte::Internal::GetBuffer(id_str); \
+    _l_ts = Latte::GetThreadStorage(); \
+    _l_rb = _l_ts->GetOrAdd(id_str); \
     _l_last = Latte::Intrinsic::RDTSC(); \
   } else { \
     uint64_t _l_now = Latte::Intrinsic::RDTSC(); \
-    _l_rb->push(_l_now - _l_last, Latte::Internal::CALIB_KEY_PULSE); \
+    _l_rb->push(_l_now - _l_last, _l_last, static_cast<uint8_t>(_l_ts->stack_ptr), Latte::Internal::CALIB_KEY_PULSE); \
     _l_last = _l_now; \
   } \
 } while(0)
@@ -173,7 +175,9 @@ inline double MedianFromSorted(const std::vector<double>& sorted) {
 }
 
 struct alignas(64) RingBuffer {
-  Cycles data[MAX_SAMPLES];
+  Cycles data[MAX_SAMPLES];   // duration
+  Cycles start[MAX_SAMPLES];  // raw start timestamp (cycles, comparable via Manager::epoch)
+  uint8_t depth[MAX_SAMPLES]; // number of Start()ed-but-not-yet-Stopped spans enclosing this sample
   size_t head = 0;
 
   // 0xFF: unset/unknown, 0xFE: mixed
@@ -181,13 +185,16 @@ struct alignas(64) RingBuffer {
 
   RingBuffer() {
     std::memset(data, 0, sizeof(data));
+    // start[]/depth[] don't need zero-init: only ever read at indices where data[i] > 0.
   }
 
-  __attribute__((always_inline)) inline void push(Cycles val, uint8_t key) {
+  __attribute__((always_inline)) inline void push(Cycles val, Cycles start_val, uint8_t depth_val, uint8_t key) {
     if (calib_key == 0xFF) calib_key = key;
     else if (calib_key != key) calib_key = 0xFE;
 
     data[head] = val;
+    start[head] = start_val;
+    depth[head] = depth_val;
     head = (head + 1) & BUFFER_MASK; // wrapping
   }
 };
@@ -205,12 +212,24 @@ struct ThreadStorage {
   }
 };
 
+struct Sample {
+  Cycles duration;
+  Cycles start; // raw cycles, relative to Manager::epoch (see DumpToJson)
+  uint8_t depth;
+};
+
 class Manager {
 public:
   std::mutex mutex;
   std::vector<ThreadStorage*> thread_buffers;
 
   double cycles_per_ns = 1.0; //Default: Unknown
+  // Reference point for `start` timestamps, set once at the very first
+  // Start()/LATTE_PULSE call program-wide (Meyer's-singleton construction
+  // timing guarantees this runs before any sample's own start capture).
+  // RDTSC is already assumed comparable across cores elsewhere in this file
+  // (calibration offsets are computed once and applied to every thread).
+  Cycles epoch = Intrinsic::RDTSC();
 
   static Manager& Get() { static Manager instance; return instance; }
 
@@ -249,16 +268,16 @@ public:
     return output;
   }
 
-  std::map<ID, std::vector<Cycles>> ExtractRawGlobal() {
-    std::map<ID, std::vector<Cycles>> global_data;
+  std::map<ID, std::vector<Sample>> ExtractSamplesGlobal() {
+    std::map<ID, std::vector<Sample>> global_data;
     std::lock_guard<std::mutex> lock(mutex);
 
     for (auto* ts : thread_buffers) {
       for (auto& [id, buffer] : ts->history) {
-        std::vector<Cycles>& vec = global_data[id];
+        std::vector<Sample>& vec = global_data[id];
 
         for (size_t i = 0; i < MAX_SAMPLES; ++i) {
-          if (buffer.data[i] > 0) vec.push_back(buffer.data[i]);
+          if (buffer.data[i] > 0) vec.push_back({buffer.data[i], buffer.start[i], buffer.depth[i]});
         }
       }
     }
@@ -304,11 +323,13 @@ struct Recorder {
 
     if (__builtin_expect(ts->stack_ptr > 0, 1)) {
       ts->stack_ptr--;
-      Cycles delta = end - ts->stack_starts[ts->stack_ptr]; // raw latency
+      const Cycles start_cycles = ts->stack_starts[ts->stack_ptr];
+      Cycles delta = end - start_cycles; // raw latency
+      const uint8_t depth = static_cast<uint8_t>(ts->stack_ptr);
       const uint8_t start_mode = ts->stack_modes[ts->stack_ptr];
       const uint8_t stop_mode  = static_cast<uint8_t>(M);
       const uint8_t key = Internal::CalibKey(start_mode, stop_mode);
-      ts->history[ts->stack_ids[ts->stack_ptr]].push(delta, key);
+      ts->history[ts->stack_ids[ts->stack_ptr]].push(delta, start_cycles, depth, key);
       return delta;
     }
     return 0;
@@ -669,27 +690,29 @@ inline void DumpToJson(const std::string& path) {
   Manager& mgr = Manager::Get();
   mgr.EnsureCalibrated();
 
-  auto raw_data = mgr.ExtractRawGlobal();
+  auto raw_data = mgr.ExtractSamplesGlobal();
 
   std::ofstream file(path);
   file << std::fixed << std::setprecision(2);
   file << "[\n";  // Start array for Vega-Lite
 
   bool first_row = true;
-  for (auto& [id, cycles_vec] : raw_data) {
-    if (cycles_vec.empty()) continue;
+  for (auto& [id, samples] : raw_data) {
+    if (samples.empty()) continue;
 
-    // Convert cycles to nanoseconds
-    for (size_t idx = 0; idx < cycles_vec.size(); ++idx) {
+    for (size_t idx = 0; idx < samples.size(); ++idx) {
       if (!first_row) file << ",\n";
       first_row = false;
 
-      double ns = cycles_vec[idx] / mgr.cycles_per_ns;
+      const double duration_ns = samples[idx].duration / mgr.cycles_per_ns;
+      const double start_ns = (double)(samples[idx].start - mgr.epoch) / mgr.cycles_per_ns;
 
       file << "  {\n";
       file << "    \"component\": \"" << id << "\",\n";
       file << "    \"sample_index\": " << idx << ",\n";
-      file << "    \"duration_ns\": " << ns << "\n";
+      file << "    \"depth\": " << (int)samples[idx].depth << ",\n";
+      file << "    \"start_ns\": " << start_ns << ",\n";
+      file << "    \"duration_ns\": " << duration_ns << "\n";
       file << "  }";
     }
   }

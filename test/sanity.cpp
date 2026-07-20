@@ -6,6 +6,8 @@
 // LATTE_DISABLE actually compiling down to a true no-op.
 #include <cassert>
 #include <cstdint>
+#include <cstdio>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -94,6 +96,59 @@ int main() {
     auto s = Latte::Snapshot(ids[t].c_str());
     CHECK(s.size() == static_cast<size_t>(ITERS_PER_THREAD));
   }
+
+  // Depth must equal the number of currently-open spans, for both Start/Stop
+  // and LATTE_PULSE (a pulse fired from inside N nested spans is not itself
+  // a stack entry, but must still report depth N).
+  Latte::Hard::Start("depth_outer");   // depth 0
+  Latte::Mid::Start("depth_middle");   // depth 1
+  Latte::Fast::Start("depth_inner");   // depth 2
+  // LATTE_PULSE is keyed by call site (each source line owns its own static
+  // state), so it must be called repeatedly from the same line to produce a
+  // sample: the first call only primes it, the second measures the gap.
+  for (int i = 0; i < 2; ++i) {
+    LATTE_PULSE("depth_pulse");        // depth 3 (3 spans open: outer, middle, inner)
+  }
+  Latte::Fast::Stop("depth_inner");
+  Latte::Mid::Stop("depth_middle");
+  Latte::Hard::Stop("depth_outer");
+
+  {
+    auto samples = Latte::Manager::Get().ExtractSamplesGlobal();
+    CHECK(samples.at("depth_outer").back().depth == 0);
+    CHECK(samples.at("depth_middle").back().depth == 1);
+    CHECK(samples.at("depth_inner").back().depth == 2);
+    CHECK(samples.at("depth_pulse").back().depth == 3);
+
+    // start must be non-decreasing across a sequential (non-wrapped) series.
+    for (size_t i = 1; i < samples.at("sanity_component").size(); ++i) {
+      CHECK(samples.at("sanity_component")[i].start >= samples.at("sanity_component")[i - 1].start);
+    }
+  }
+
+  // DumpToJson must include the new depth/start_ns fields, and produce a
+  // well-formed, non-empty JSON array.
+  const std::string json_path = "bin/sanity_dump.json";
+  Latte::DumpToJson(json_path);
+  {
+    std::ifstream f(json_path);
+    CHECK(f.good());
+    std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    CHECK(!content.empty());
+    size_t first = content.find_first_not_of(" \t\r\n");
+    size_t last = content.find_last_not_of(" \t\r\n");
+    CHECK(first != std::string::npos && content[first] == '[' && content[last] == ']');
+    CHECK(content.find("\"depth\"") != std::string::npos);
+    CHECK(content.find("\"start_ns\"") != std::string::npos);
+    CHECK(content.find("\"duration_ns\"") != std::string::npos);
+  }
+
+  // DumpToJson to a directory that doesn't exist must fail gracefully: no
+  // crash/throw, and no file materializes.
+  const std::string bad_path = "bin/does_not_exist/sanity_dump.json";
+  std::remove(bad_path.c_str());
+  Latte::DumpToJson(bad_path);
+  CHECK(!std::ifstream(bad_path).good());
 
   std::cout << "sanity (enabled build): " << g_checks << " checks passed\n";
   return 0;

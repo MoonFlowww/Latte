@@ -124,27 +124,30 @@ Latte::DumpToJson("dump.json");
 
 Each element has the shape:
 ```json
-{ "component": "Sim_OrderFlow", "sample_index": 42, "duration_ns": 34.72 }
+{ "component": "Sim_OrderFlow", "sample_index": 42, "depth": 2, "start_ns": 1882.44, "duration_ns": 34.72 }
 ```
 
-- `sample_index` is the position of the sample **within its own component's series** (0, 1, 2, ...). It is **not** a shared timeline — two samples with the same `sample_index` from different components were not necessarily captured at the same moment. There is currently no start/begin timestamp per sample, only its duration.
+- `sample_index` is the position of the sample **within its own component's series** (0, 1, 2, ...) in ring-buffer storage order. Once a series wraps past `MAX_SAMPLES`, storage order is no longer chronological — use `start_ns` if you need actual time order.
+- `depth` is the number of `Start()`ed-but-not-yet-`Stop()`ed spans enclosing this sample at the moment it was captured (0 = nothing else open). It's computed the same way for `Start`/`Stop` pairs and for `LATTE_PULSE` — both read the current size of the per-thread call stack, so a pulse fired from inside three nested spans reports depth 3 even though it isn't itself a stack entry.
+- `start_ns` is relative to `Manager::epoch`, a single reference point captured once at the very first instrumented call anywhere in the program (any mode, any thread) — so `start_ns` values are comparable across components and threads, not just within one series. This assumes RDTSC is comparable across cores, which the file already relies on elsewhere (the global calibration offsets are computed once and applied to every thread).
 - Samples are **not calibrated**: no overhead subtraction and no `Internal::CleanData` outlier filtering are applied (unlike `DumpToStream`), since the export is meant as raw material for downstream analysis.
 - If `path` cannot be opened for writing (e.g. the parent directory doesn't exist), the call fails silently and no file is produced — check for the file's existence if that matters to your pipeline.
+
+Cost of capturing `depth`/`start_ns`: `Recorder::Stop` and `LATTE_PULSE` already had both values in local state (the stack index and the RDTSC value taken at `Start()`), so writing them out is two extra stores per sample — measured median Start+Stop and `LATTE_PULSE` cost is unchanged (94.0 / 48.0 cycles, before and after, `-O3 -march=native`, pinned core). The real cost is memory: `sizeof(RingBuffer)` grows from 512.4 KiB to 1088 KiB (+112.5%) per unique `(thread, component)` pair, since `start`/`depth` are stored as parallel arrays alongside the existing `data` array. Only allocated lazily for IDs actually used, but it isn't free.
 
 ---
 
 ## Visualizing latency data
 
-`DumpToJson`'s output only carries `component`, `sample_index`, and `duration_ns` — there is no start/begin timestamp per sample. That rules out any chart that needs to place intervals on a shared time axis (streamgraph, Gantt, stacked-area-over-time): those require both a start and a length, and lining up `sample_index` across components as if it were a synchronized clock would misrepresent the data.
+[`latency.vl.json`](latency.vl.json) is a [Vega-Lite](https://vega.github.io/vega-lite/) icicle/flame chart that reads `dump.json` directly — `x`/`x2` place each sample at `[start_ns, start_ns + duration_ns]`, `y` is `depth`, so nested spans stack under their parents instead of being plotted as unrelated siblings:
 
-What the export *does* support well is comparing the **distribution** of latency per component — the same statistic `DumpToStream` already reports (median/min/max/outliers), just re-explorable interactively. [`latency.vl.json`](latency.vl.json) is a [Vega-Lite](https://vega.github.io/vega-lite/) boxplot spec that reads `dump.json` directly:
+![Latte latency icicle/flame chart, zoomed to a few steady-state simulation ticks](latency.png)
 
-![Latte latency distribution boxplot](latency.png)
+(zoomed to a handful of ticks — a fresh run spans hours-to-nanoseconds and looks like a blank page until you zoom in; drag on the chart to pan/zoom, it's an interactive `bind: scales` selection)
 
-- Y-axis is log-scaled: component durations in this run span from ~0.2 ns to ~7 ms, so a linear axis would flatten everything below the DP components.
-- Boxes use Vega-Lite's default Tukey (1.5×IQR) whiskers, with points beyond them drawn individually — the same outlier definition `DumpToStream`'s `OUTLIER` column uses, so the two views agree.
-- Components are plotted flat, side by side. Latte's `Start`/`Stop` calls can nest (e.g. `Sim_Tick_Total` contains `Sim_Impulse`, `Sim_OrderFlow`, ...), but that hierarchy isn't in the exported data yet, so a parent span and its own children currently sit on the same axis as if they were unrelated siblings.
-- Open `latency.vl.json` in the [Vega-Lite Editor](https://vega.github.io/editor/) (or any Vega-Lite-capable viewer) alongside a generated `dump.json` to explore interactively (tooltips, zoom).
+- `LATTE_PULSE` samples are included at their real depth (e.g. `Sim_AskLoop`/`Sim_BidLoop` here are pulses fired from inside `Sim_OrderFlow`, so they render nested under it) — but a pulse's duration is "time since the last pulse of the same ID," not "time this code was actively executing," so a wide pulse bar means infrequent arrivals, not necessarily a slow call.
+- The x-scale is explicitly `"zero": false` — a Gantt-style time axis should never be forced to include 0.
+- For the full-run **distribution** view (median/outliers per component, the same numbers `DumpToStream` reports), open `latency.vl.json` in the [Vega-Lite Editor](https://vega.github.io/editor/) and swap the mark for `boxplot`/`tick`, or query `dump.json` directly — the icicle view above is for inspecting structure and relative timing, not aggregate stats.
 
 ---
 
