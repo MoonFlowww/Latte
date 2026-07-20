@@ -654,6 +654,7 @@ inline void DumpToStream(std::ostream& oss, Parameter::Unit unit = Parameter::Cy
 #include <ostream>
 #include <vector>
 #include <string>
+#include <cstdint>
 
 #define LATTE_PULSE(id_str) do {} while(0)
 #define LATTE_FREQ(cycles_per_ns) do {} while(0)

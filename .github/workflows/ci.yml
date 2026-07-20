@@ -1,0 +1,82 @@
+name: CI
+
+# Scope: correctness only (build failures, UB, memory errors, races,
+# leaks). Deliberately no performance gating - shared CI runners are too
+# noisy for ns-level thresholds; perf regression tracking is a manual,
+# maintainer-run tool (see test/regression.cpp on the start-depth branch).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: build+test (${{ matrix.compiler }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Toolchain info
+        run: just CXX=${{ matrix.compiler }} info
+
+      - name: Syntax check Latte.hpp (enabled + LATTE_DISABLE)
+        run: just CXX=${{ matrix.compiler }} check
+
+      - name: Build all binaries
+        run: just CXX=${{ matrix.compiler }} all
+
+      - name: Run sanity checks (enabled + LATTE_DISABLE builds)
+        run: just CXX=${{ matrix.compiler }} run-sanity
+
+      - name: Smoke-run speedtest/accuracy/testcase (compile+run+exit 0 only, no timing assertions)
+        run: |
+          just CXX=${{ matrix.compiler }} run-speed
+          just CXX=${{ matrix.compiler }} run-accuracy
+          just CXX=${{ matrix.compiler }} run-test
+
+  sanitize:
+    name: sanitize (${{ matrix.sanitizer }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address+undefined, thread]
+        include:
+          - sanitizer: address+undefined
+            flags: -fsanitize=address,undefined
+          - sanitizer: thread
+            flags: -fsanitize=thread
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build sanity.cpp with sanitizers (enabled build)
+        run: g++ -O1 -g -std=c++17 -Wall -Wextra ${{ matrix.flags }} -I. test/sanity.cpp -o sanity_sanitized -lpthread
+
+      - name: Run (enabled build)
+        env:
+          LSAN_OPTIONS: suppressions=test/lsan.supp
+        run: ./sanity_sanitized
+
+      - name: Build sanity.cpp with sanitizers (LATTE_DISABLE build)
+        run: g++ -O1 -g -std=c++17 -Wall -Wextra -DLATTE_DISABLE ${{ matrix.flags }} -I. test/sanity.cpp -o sanity_disabled_sanitized -lpthread
+
+      - name: Run (LATTE_DISABLE build)
+        env:
+          LSAN_OPTIONS: suppressions=test/lsan.supp
+        run: ./sanity_disabled_sanitized
