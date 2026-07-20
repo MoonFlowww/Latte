@@ -127,8 +127,10 @@ int main() {
   }
 
   // DumpToJson must include the new depth/start_ns fields, and produce a
-  // well-formed, non-empty JSON array.
-  const std::string json_path = "bin/sanity_dump.json";
+  // well-formed, non-empty JSON array. Written to the cwd rather than bin/ -
+  // this test is also built directly with g++ (sanitizer CI jobs), where
+  // bin/ (created by the justfile's `setup` recipe) doesn't exist.
+  const std::string json_path = "sanity_dump.json";
   Latte::DumpToJson(json_path);
   {
     std::ifstream f(json_path);
@@ -142,10 +144,11 @@ int main() {
     CHECK(content.find("\"start_ns\"") != std::string::npos);
     CHECK(content.find("\"duration_ns\"") != std::string::npos);
   }
+  std::remove(json_path.c_str());
 
   // DumpToJson to a directory that doesn't exist must fail gracefully: no
   // crash/throw, and no file materializes.
-  const std::string bad_path = "bin/does_not_exist/sanity_dump.json";
+  const std::string bad_path = "sanity_dump_missing_dir/sanity_dump.json";
   std::remove(bad_path.c_str());
   Latte::DumpToJson(bad_path);
   CHECK(!std::ifstream(bad_path).good());
