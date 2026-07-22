@@ -17,6 +17,8 @@
 #include <limits>
 #include <cstring>
 #include <memory>
+#include <queue>
+#include <cstdio>
 
 
 #if defined(_MSC_VER)
@@ -223,12 +225,7 @@ namespace Latte {
       std::mutex mutex;
       std::vector<ThreadStorage*> thread_buffers;
 
-      double cycles_per_ns = 1.0; //Default: Unknown
-                                  // Reference point for `start` timestamps, set once at the very first
-                                  // Start()/LATTE_PULSE call program-wide (Meyer's-singleton construction
-                                  // timing guarantees this runs before any sample's own start capture).
-                                  // RDTSC is already assumed comparable across cores elsewhere in this file
-                                  // (calibration offsets are computed once and applied to every thread).
+      double cycles_per_ns = 1.0; //means unknown
       Cycles epoch = Intrinsic::RDTSC();
 
       static Manager& Get() { static Manager instance; return instance; }
@@ -690,33 +687,72 @@ namespace Latte {
     Manager& mgr = Manager::Get();
     mgr.EnsureCalibrated();
 
-    auto raw_data = mgr.ExtractSamplesGlobal();
-
-    std::ofstream file(path);
-    file << std::fixed << std::setprecision(2);
-    file << "[\n";  // Start array for Vega-Lite
-
-    bool first_row = true;
-    for (auto& [id, samples] : raw_data) {
-      if (samples.empty()) continue;
-
-      for (size_t idx = 0; idx < samples.size(); ++idx) {
-        if (!first_row) file << ",\n";
-        first_row = false;
-
-        const double duration_ns = samples[idx].duration / mgr.cycles_per_ns;
-        const double start_ns = (double)(samples[idx].start - mgr.epoch) / mgr.cycles_per_ns;
-
-        file << "  {\n";
-        file << "    \"component\": \"" << id << "\",\n";
-        file << "    \"sample_index\": " << idx << ",\n";
-        file << "    \"depth\": " << (int)samples[idx].depth << ",\n";
-        file << "    \"start_ns\": " << start_ns << ",\n";
-        file << "    \"duration_ns\": " << duration_ns << "\n";
-        file << "  }";
+    // Snapshot each (thread, id) ring in chronological order: pmu is monotonic per thread,
+    // so reading from top yields sorted
+    struct Track { ID id; std::vector<Sample> samples; bool pulse; };
+    std::vector<Track> tracks;
+    {
+      std::lock_guard<std::mutex> lock(mgr.mutex);
+      for (auto* ts : mgr.thread_buffers) {
+        for (auto& [id, rb] : ts->history) {
+          Track t{id, {}, rb.calib_key == Internal::CALIB_KEY_PULSE};
+          t.samples.reserve(MAX_SAMPLES);
+          for (size_t k = 0; k < MAX_SAMPLES; ++k) {
+            const size_t i = (rb.head + k) & BUFFER_MASK;
+            if (rb.data[i] > 0) t.samples.push_back({rb.data[i], rb.start[i], rb.depth[i]});
+          }
+          if (!t.samples.empty()) tracks.push_back(std::move(t));
+        }
       }
     }
-    file << "\n]\n";
+
+    size_t total = 0;
+    for (auto& t : tracks) total += t.samples.size();
+
+    // K-way merge of sorted tracks by start time: O(N log k), k = #tracks.
+    struct Cursor { Cycles start; uint32_t track; uint32_t idx; };
+    auto later = [](const Cursor& a, const Cursor& b) { return a.start > b.start; };
+    std::priority_queue<Cursor, std::vector<Cursor>, decltype(later)> heap(later);
+    for (uint32_t t = 0; t < tracks.size(); ++t)
+      heap.push({tracks[t].samples[0].start, t, 0});
+
+    std::string out;
+    out.reserve(total * 128 + 16);
+    out += "[\n";
+
+    const double inv_cpns = 1.0 / mgr.cycles_per_ns;
+    char row[256];
+    while (!heap.empty()) {
+      Cursor c = heap.top(); heap.pop();
+      const Track& t = tracks[c.track];
+      const Sample& s = t.samples[c.idx];
+
+      const double start_ns = (double)(s.start - mgr.epoch) * inv_cpns;
+      const double dur_ns   = (double)s.duration * inv_cpns;
+      // Dual schema in one row: name/ph/pid/tid/ts/dur make the file a valid for Chrome Trace (ui.perfetto.dev)
+      // And work for custom use too
+      // TODO: need to rework pulse, we treat it differently
+      const int len = t.pulse
+        ? snprintf(row, sizeof(row),
+            "  {\"name\": \"%s\", \"ph\": \"i\", \"s\": \"t\", \"pid\": 0, \"tid\": 0, \"ts\": %.3f,"
+            " \"component\": \"%s\", \"sample_index\": %u, \"depth\": %u, \"start_ns\": %.2f, \"duration_ns\": %.2f}",
+            t.id, (start_ns + dur_ns) / 1e3,
+            t.id, c.idx, (unsigned)s.depth, start_ns, dur_ns)
+        : snprintf(row, sizeof(row),
+            "  {\"name\": \"%s\", \"ph\": \"X\", \"pid\": 0, \"tid\": 0, \"ts\": %.3f, \"dur\": %.3f,"
+            " \"component\": \"%s\", \"sample_index\": %u, \"depth\": %u, \"start_ns\": %.2f, \"duration_ns\": %.2f}",
+            t.id, start_ns / 1e3, dur_ns / 1e3,
+            t.id, c.idx, (unsigned)s.depth, start_ns, dur_ns);
+      out.append(row, (size_t)len);
+      out += (--total > 0) ? ",\n" : "\n";
+
+      if (c.idx + 1 < t.samples.size())
+        heap.push({t.samples[c.idx + 1].start, c.track, c.idx + 1});
+    }
+    out += "]\n";
+
+    std::ofstream file(path, std::ios::binary);
+    file.write(out.data(), (std::streamsize)out.size());
   }
 
 }
@@ -746,10 +782,9 @@ namespace Latte{
     inline void Start(ID) {} 
     inline void Stop(ID) {} 
   }
-
-  namespace Hard { 
-    inline void Start(ID) {} 
-    inline void Stop(ID) {} 
+  namespace Hard {
+    inline void Start(ID) {}
+    inline void Stop(ID) {}
   }
 
   namespace Parameter {
@@ -772,3 +807,4 @@ namespace Latte{
   inline void DumpToJson(const std::string& path) { (void)path; }
 }
 #endif // LATTE_DISABLE
+
