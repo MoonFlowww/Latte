@@ -122,12 +122,14 @@ Latte::DumpToJson(const std::string& path);
 Latte::DumpToJson("dump.json");
 ```
 
-Each element has the shape:
+Each element has the shape (a Chrome Trace complete event plus Latte-specific fields):
 ```json
-{ "component": "Sim_OrderFlow", "sample_index": 42, "depth": 2, "start_ns": 1882.44, "duration_ns": 34.72 }
+{ "name": "Sim_OrderFlow", "ph": "X", "pid": 4123, "tid": 58231, "ts": 1.882, "dur": 0.035, "component": "Sim_OrderFlow", "sample_index": 42, "depth": 2, "start_ns": 1882.44, "duration_ns": 34.72 }
 ```
 
+- `Start`/`Stop` spans and `LATTE_PULSE` samples are serialized with **one single schema**: every sample is an interval `[start_ns, start_ns + duration_ns]` written as `ph: "X"` (complete event) with `ts`/`dur` in µs, and `start_ns`/`duration_ns` in ns for custom use. For a span the duration is one call's execution time; for a pulse (used inside loops) it's one iteration's execution time — same data, same row shape, no per-row discriminator.
 - `sample_index` is the position of the sample **within its own component's series** (0, 1, 2, ...) in ring-buffer storage order. Once a series wraps past `MAX_SAMPLES`, storage order is no longer chronological — use `start_ns` if you need actual time order.
+- `tid` is the OS thread id of the recording thread (`gettid` on Linux, `pthread_threadid_np` on macOS, `GetCurrentThreadId` on Windows) — samples from the same thread share a `tid`, so Chrome Trace viewers group them onto the same lane. `pid` is the OS process id (`getpid`/`GetCurrentProcessId`); the `(pid, tid)` pair uniquely identifies a thread lane, so dumps from multiple processes can be merged without collisions.
 - `depth` is the number of `Start()`ed-but-not-yet-`Stop()`ed spans enclosing this sample at the moment it was captured (0 = nothing else open). It's computed the same way for `Start`/`Stop` pairs and for `LATTE_PULSE` — both read the current size of the per-thread call stack, so a pulse fired from inside three nested spans reports depth 3 even though it isn't itself a stack entry.
 - `start_ns` is relative to `Manager::epoch`, a single reference point captured once at the very first instrumented call anywhere in the program (any mode, any thread) — so `start_ns` values are comparable across components and threads, not just within one series. This assumes RDTSC is comparable across cores, which the file already relies on elsewhere (the global calibration offsets are computed once and applied to every thread).
 - Samples are **not calibrated**: no overhead subtraction and no `Internal::CleanData` outlier filtering are applied (unlike `DumpToStream`), since the export is meant as raw material for downstream analysis.

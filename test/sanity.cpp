@@ -143,6 +143,17 @@ int main() {
     CHECK(content.find("\"depth\"") != std::string::npos);
     CHECK(content.find("\"start_ns\"") != std::string::npos);
     CHECK(content.find("\"duration_ns\"") != std::string::npos);
+    // Start/Stop spans and LATTE_PULSE share one serialization schema: every
+    // sample is a Chrome Trace complete event (ph: "X") with no per-row
+    // discriminator. Pulses must not be emitted as instant events (ph: "i").
+    // The recording thread's OS id must be preserved in every row (no tid: 0).
+    CHECK(content.find("\"ph\": \"X\"") != std::string::npos);
+    CHECK(content.find("\"ph\": \"i\"") == std::string::npos);
+    CHECK(content.find("\"kind\"") == std::string::npos);
+    CHECK(content.find("\"tid\": ") != std::string::npos);
+    CHECK(content.find("\"tid\": 0") == std::string::npos);
+    CHECK(content.find("\"pid\": ") != std::string::npos);
+    CHECK(content.find("\"pid\": 0") == std::string::npos);
   }
   std::remove(json_path.c_str());
 
