@@ -27,6 +27,20 @@
 #include <x86intrin.h>
 #endif
 
+#include <thread>
+#include <functional>
+
+#if defined(_MSC_VER)
+#include <windows.h>
+#else
+#include <unistd.h>
+#if defined(__linux__)
+#include <sys/syscall.h>
+#elif defined(__APPLE__)
+#include <pthread.h>
+#endif
+#endif
+
 #define LATTE_PULSE(id_str) \
   do { \
     static thread_local Latte::RingBuffer* _l_rb = nullptr; \
@@ -174,6 +188,31 @@ namespace Latte {
       const size_t n = sorted.size();
       return (n % 2 == 0) ? (sorted[n/2 - 1] + sorted[n/2]) / 2.0 : sorted[n/2];
     }
+
+    // OS thread id: real kernel tid where available, stable per thread for the
+    // life of the recording. Used to tag every sample in DumpToJson.
+    inline uint64_t CurrentThreadId() {
+#if defined(__linux__)
+      return static_cast<uint64_t>(::syscall(SYS_gettid));
+#elif defined(_MSC_VER)
+      return static_cast<uint64_t>(::GetCurrentThreadId());
+#elif defined(__APPLE__)
+      uint64_t tid = 0;
+      pthread_threadid_np(nullptr, &tid);
+      return tid;
+#else
+      return static_cast<uint64_t>(std::hash<std::thread::id>{}(std::this_thread::get_id()));
+#endif
+    }
+
+    // OS process id, used as the pid field in DumpToJson (Chrome Trace format).
+    inline uint32_t CurrentProcessId() {
+#if defined(_MSC_VER)
+      return static_cast<uint32_t>(::GetCurrentProcessId());
+#else
+      return static_cast<uint32_t>(::getpid());
+#endif
+    }
   }
 
   struct alignas(64) RingBuffer {
@@ -206,6 +245,7 @@ namespace Latte {
     Cycles stack_starts[MAX_ACTIVE_SLOTS];
     uint8_t stack_modes[MAX_ACTIVE_SLOTS]; // Latte::Mode encoded
     size_t stack_ptr = 0;
+    uint64_t tid = 0; // OS thread id, captured once when this storage is created
 
     // pointer comparison
     std::map<ID, RingBuffer> history;
@@ -293,6 +333,7 @@ namespace Latte {
     static thread_local ThreadStorage* ts = nullptr;
     if (__builtin_expect(!ts, 0)) {
       ts = new ThreadStorage();
+      ts->tid = Internal::CurrentThreadId();
       Manager::Get().Register(ts);
     }
     return ts;
@@ -689,13 +730,13 @@ namespace Latte {
 
     // Snapshot each (thread, id) ring in chronological order: pmu is monotonic per thread,
     // so reading from top yields sorted
-    struct Track { ID id; std::vector<Sample> samples; bool pulse; };
+    struct Track { ID id; uint64_t tid; std::vector<Sample> samples; };
     std::vector<Track> tracks;
     {
       std::lock_guard<std::mutex> lock(mgr.mutex);
       for (auto* ts : mgr.thread_buffers) {
         for (auto& [id, rb] : ts->history) {
-          Track t{id, {}, rb.calib_key == Internal::CALIB_KEY_PULSE};
+          Track t{id, ts->tid, {}};
           t.samples.reserve(MAX_SAMPLES);
           for (size_t k = 0; k < MAX_SAMPLES; ++k) {
             const size_t i = (rb.head + k) & BUFFER_MASK;
@@ -721,6 +762,7 @@ namespace Latte {
     out += "[\n";
 
     const double inv_cpns = 1.0 / mgr.cycles_per_ns;
+    const uint32_t pid = Internal::CurrentProcessId();
     char row[256];
     while (!heap.empty()) {
       Cursor c = heap.top(); heap.pop();
@@ -729,20 +771,16 @@ namespace Latte {
 
       const double start_ns = (double)(s.start - mgr.epoch) * inv_cpns;
       const double dur_ns   = (double)s.duration * inv_cpns;
-      // Dual schema in one row: name/ph/pid/tid/ts/dur make the file a valid for Chrome Trace (ui.perfetto.dev)
-      // And work for custom use too
-      // TODO: need to rework pulse, we treat it differently
-      const int len = t.pulse
-        ? snprintf(row, sizeof(row),
-            "  {\"name\": \"%s\", \"ph\": \"i\", \"s\": \"t\", \"pid\": 0, \"tid\": 0, \"ts\": %.3f,"
-            " \"component\": \"%s\", \"sample_index\": %u, \"depth\": %u, \"start_ns\": %.2f, \"duration_ns\": %.2f}",
-            t.id, (start_ns + dur_ns) / 1e3,
-            t.id, c.idx, (unsigned)s.depth, start_ns, dur_ns)
-        : snprintf(row, sizeof(row),
-            "  {\"name\": \"%s\", \"ph\": \"X\", \"pid\": 0, \"tid\": 0, \"ts\": %.3f, \"dur\": %.3f,"
-            " \"component\": \"%s\", \"sample_index\": %u, \"depth\": %u, \"start_ns\": %.2f, \"duration_ns\": %.2f}",
-            t.id, start_ns / 1e3, dur_ns / 1e3,
-            t.id, c.idx, (unsigned)s.depth, start_ns, dur_ns);
+      // One schema for every sample: a Chrome Trace complete event (ph: "X")
+      // plus the custom fields. A Start/Stop span and a LATTE_PULSE both store
+      // an interval [start, start + duration] — per-call execution time vs.
+      // per-loop-iteration execution time — so no per-row discriminator is
+      // needed; monitoring can treat them identically.
+      const int len = snprintf(row, sizeof(row),
+          "  {\"name\": \"%s\", \"ph\": \"X\", \"pid\": %u, \"tid\": %llu, \"ts\": %.3f, \"dur\": %.3f,"
+          " \"component\": \"%s\", \"sample_index\": %u, \"depth\": %u, \"start_ns\": %.2f, \"duration_ns\": %.2f}",
+          t.id, pid, (unsigned long long)t.tid, start_ns / 1e3, dur_ns / 1e3,
+          t.id, c.idx, (unsigned)s.depth, start_ns, dur_ns);
       out.append(row, (size_t)len);
       out += (--total > 0) ? ",\n" : "\n";
 
