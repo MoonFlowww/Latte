@@ -129,9 +129,9 @@ Each element has the shape (a Chrome Trace complete event plus Latte-specific fi
 
 - `Start`/`Stop` spans and `LATTE_PULSE` samples are serialized with **one single schema**: every sample is an interval `[start_ns, start_ns + duration_ns]` written as `ph: "X"` (complete event) with `ts`/`dur` in µs, and `start_ns`/`duration_ns` in ns for custom use. For a span the duration is one call's execution time; for a pulse (used inside loops) it's one iteration's execution time — same data, same row shape, no per-row discriminator.
 - `sample_index` is the position of the sample **within its own component's series** (0, 1, 2, ...) in ring-buffer storage order. Once a series wraps past `MAX_SAMPLES`, storage order is no longer chronological — use `start_ns` if you need actual time order.
-- `tid` is the OS thread id of the recording thread (`gettid` on Linux, `pthread_threadid_np` on macOS, `GetCurrentThreadId` on Windows) — samples from the same thread share a `tid`, so Chrome Trace viewers group them onto the same lane. `pid` is the OS process id (`getpid`/`GetCurrentProcessId`); the `(pid, tid)` pair uniquely identifies a thread lane, so dumps from multiple processes can be merged without collisions.
-- `depth` is the number of `Start()`ed-but-not-yet-`Stop()`ed spans enclosing this sample at the moment it was captured (0 = nothing else open). It's computed the same way for `Start`/`Stop` pairs and for `LATTE_PULSE` — both read the current size of the per-thread call stack, so a pulse fired from inside three nested spans reports depth 3 even though it isn't itself a stack entry.
-- `start_ns` is relative to `Manager::epoch`, a single reference point captured once at the very first instrumented call anywhere in the program (any mode, any thread) — so `start_ns` values are comparable across components and threads, not just within one series. This assumes RDTSC is comparable across cores, which the file already relies on elsewhere (the global calibration offsets are computed once and applied to every thread).
+- `tid` is the OS thread id of the recording thread (`gettid` on Linux, `pthread_threadid_np` on macOS, `GetCurrentThreadId` on Windows) samples from the same thread share a `tid`, so Chrome Trace viewers group them onto the same lane. `pid` is the OS process id (`getpid`/`GetCurrentProcessId`); the `(pid, tid)` pair uniquely identifies a thread lane, so dumps from multiple processes can be merged without collisions.
+- `depth` is the number of `Start()`ed but not yet `Stop()`ed spans enclosing this sample at the moment it was captured (0 = nothing else open). It's computed the same way for `Start`/`Stop` pairs and for `LATTE_PULSE` — both read the current size of the per-thread call stack, so a pulse fired from inside three nested spans reports depth 3 even though it isn't itself a stack entry.
+- `start_ns` is relative to `Manager::epoch`, a single reference point captured once at the very first instrumented call anywhere in the program (any mode, any thread), so `start_ns` values are comparable across components and threads, not just within one series. This assumes RDTSC is comparable across cores, which the file already relies on elsewhere (the global calibration offsets are computed once and applied to every thread).
 - Samples are **not calibrated**: no overhead subtraction and no `Internal::CleanData` outlier filtering are applied (unlike `DumpToStream`), since the export is meant as raw material for downstream analysis.
 - If `path` cannot be opened for writing (e.g. the parent directory doesn't exist), the call fails silently and no file is produced — check for the file's existence if that matters to your pipeline.
 
@@ -141,15 +141,18 @@ Cost of capturing `depth`/`start_ns`: `Recorder::Stop` and `LATTE_PULSE` already
 
 ## Visualizing latency data
 
-[`latency.vl.json`](latency.vl.json) is a [Vega-Lite](https://vega.github.io/vega-lite/) icicle/flame chart that reads `dump.json` directly — `x`/`x2` place each sample at `[start_ns, start_ns + duration_ns]`, `y` is `depth`, so nested spans stack under their parents instead of being plotted as unrelated siblings:
+`DumpToJson("dump.json")` writes the [Chrome Trace Event Format](https://docs.google.com/document/d/1CvAClvFfyA5R-PhYUmn5OOQtYMH4h6I0nSsKchNAySU), so the file can be dropped straight into [Perfetto](https://ui.perfetto.dev/) (or `chrome://tracing`) and rendered as a timeline:
 
-![Latte latency icicle/flame chart, zoomed to a few steady-state simulation ticks](latency.png)
+- Every sample — `Start`/`Stop` span or `LATTE_PULSE` — is a complete event (`ph: "X"`), drawn as a horizontal bar from `ts` to `ts + dur`.
+- `pid`/`tid` are real OS ids, so Perfetto shows one process with one lane per thread.
+- Nesting is computed from the bars themselves: a bar whose interval contains another renders as its parent, so nested spans stack under their parents, and a pulse fired inside a span lands inside that span's bar.
+- The custom fields (`component`, `sample_index`, `depth`, `start_ns`, `duration_ns`) ride along for filtering and tooltips.
 
-(zoomed to a handful of ticks — a fresh run spans hours-to-nanoseconds and looks like a blank page until you zoom in; drag on the chart to pan/zoom, it's an interactive `bind: scales` selection)
+Notes:
 
-- `LATTE_PULSE` samples are included at their real depth (e.g. `Sim_AskLoop`/`Sim_BidLoop` here are pulses fired from inside `Sim_OrderFlow`, so they render nested under it) — but a pulse's duration is "time since the last pulse of the same ID," not "time this code was actively executing," so a wide pulse bar means infrequent arrivals, not necessarily a slow call.
-- The x-scale is explicitly `"zero": false` — a Gantt-style time axis should never be forced to include 0.
-- For the full-run **distribution** view (median/outliers per component, the same numbers `DumpToStream` reports), open `latency.vl.json` in the [Vega-Lite Editor](https://vega.github.io/editor/) and swap the mark for `boxplot`/`tick`, or query `dump.json` directly — the icicle view above is for inspecting structure and relative timing, not aggregate stats.
+- A `LATTE_PULSE` bar is one loop iteration's execution time (pulses are used inside loops, once per iteration). Consecutive pulses are contiguous `start_{i+1} = start_i + duration_i`, so a pulse component renders as one fused bar spanning the whole loop; its total width is the loop's total time, and a wide bar means a slow iteration.
+- A fresh run spans hours-to-nanoseconds and looks like a blank page until you zoom in (Perfetto: `A`/`D` pan, `W`/`S` zoom).
+- For the full-run **distribution** view (median/outliers per component, the same numbers `DumpToStream` reports), query `dump.json` directly or run `DumpToStream`; the timeline is for structure and relative timing, not aggregate stats.
 
 ---
 
