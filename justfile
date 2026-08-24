@@ -5,6 +5,12 @@ INCLUDE := "-I."
 
 BIN_DIR := "bin"
 TEST_DIR := "test"
+BENCH_DIR := "bench"
+
+# Caliper/Likwid install prefix (bench/caliper_bench.cpp, bench/annot_bench.cpp)
+CALIPER_PREFIX := env_var("HOME") + "/.local"
+# Tracy source (client is header + TracyClient.cpp, no install needed)
+TRACY_PREFIX := env_var("HOME") + "/.local/src/tracy"
 
 default: all
 
@@ -60,6 +66,47 @@ run-sanity: sanity sanity-disabled
   @./{{BIN_DIR}}/sanity_disabled
 
 run: run-speed run-test run-accuracy run-sanity
+
+bench-caliper: setup
+  @echo "-> Compiling caliper_bench.cpp [Caliper: {{CALIPER_PREFIX}}]..."
+  {{CXX}} {{CXXFLAGS}} {{INCLUDE}} -I{{CALIPER_PREFIX}}/include {{BENCH_DIR}}/caliper_bench.cpp -o {{BIN_DIR}}/caliper_bench -L{{CALIPER_PREFIX}}/lib -lcaliper -Wl,-rpath,{{CALIPER_PREFIX}}/lib {{LDFLAGS}}
+  @echo "Built {{BIN_DIR}}/caliper_bench"
+
+run-bench-caliper: bench-caliper
+  @echo "-> Run 1/3: Caliper inactive"
+  @./{{BIN_DIR}}/caliper_bench
+  @echo "-> Run 2/3: CALI_CONFIG=runtime-report"
+  @CALI_CONFIG=runtime-report ./{{BIN_DIR}}/caliper_bench
+  @echo "-> Run 3/3: CALI_CONFIG=event-trace"
+  @CALI_CONFIG=event-trace ./{{BIN_DIR}}/caliper_bench
+
+# annot_bench: Latte vs Caliper vs Likwid vs Tracy vs chrono (Google Benchmark)
+# Requires: libcaliper, liblikwid, libbenchmark in ~/.local, tracy source in ~/.local/src/tracy
+bench-annot: setup
+  @echo "-> Compiling annot_bench.cpp [Caliper + Likwid + Tracy + Google Benchmark]..."
+  {{CXX}} {{CXXFLAGS}} -pthread {{INCLUDE}} -I{{CALIPER_PREFIX}}/include -I{{TRACY_PREFIX}}/public -DLIKWID_PERFMON -DTRACY_ENABLE {{BENCH_DIR}}/annot_bench.cpp {{TRACY_PREFIX}}/public/TracyClient.cpp -o {{BIN_DIR}}/annot_bench -L{{CALIPER_PREFIX}}/lib -lcaliper -llikwid -lbenchmark -Wl,-rpath,{{CALIPER_PREFIX}}/lib
+  @echo "Built {{BIN_DIR}}/annot_bench"
+
+# Full matrix: Part A (overhead) + Part B (measurement error).
+# NOTE: event-trace writes a .cali trace in the CWD (removed here after R3).
+# NOTE: for the realistic Tracy number, run tracy-capture while the client listens:
+#   tracy-capture -o trace.tracy   (the client binds 127.0.0.1:8086 itself)
+run-bench-annot: bench-annot
+  @echo "-> R1: all inactive"
+  @./{{BIN_DIR}}/annot_bench
+  @echo "-> R2: CALI_CONFIG=runtime-report"
+  @CALI_CONFIG=runtime-report ./{{BIN_DIR}}/annot_bench
+  @echo "-> R3: CALI_CONFIG=event-trace (caliper cases only)"
+  @CALI_CONFIG=event-trace ./{{BIN_DIR}}/annot_bench --benchmark_filter=caliper_ --benchmark_min_time=0.3s
+  @rm -f ./*.cali
+  @echo "-> R4: likwid-perfctr -m -g CLOCK -c 3"
+  @{{CALIPER_PREFIX}}/bin/likwid-perfctr -m -g CLOCK -c 3 ./{{BIN_DIR}}/annot_bench
+  @echo "-> E1: error analysis (truth / latte / chrono)"
+  @./{{BIN_DIR}}/annot_bench --error
+  @echo "-> E2: error analysis + CALI_CONFIG=runtime-report"
+  @CALI_CONFIG=runtime-report ./{{BIN_DIR}}/annot_bench --error
+  @echo "-> E3: error analysis under likwid-perfctr"
+  @{{CALIPER_PREFIX}}/bin/likwid-perfctr -m -g CLOCK -c 3 ./{{BIN_DIR}}/annot_bench --error
 
 clean:
   @rm -rf {{BIN_DIR}}
