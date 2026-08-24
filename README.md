@@ -305,7 +305,6 @@ Latte provides three levels of precision by wrapping x86 intrinsics directly:
 * **C++ standard:** C++17.
 * **ID Persistence:** Use string literals or stable static pointers (`const char*`).
 * **Memory Footprint:** Reserves space for **65,536** samples per identifier per thread by default (fixed-size ring buffer, overwriting on wrap). Configurable by changing `BUFFER_PWR` / `MAX_SAMPLES` (must stay power-of-two for mask wrap).
-
 ---
 
 ## Compiler constructs and portability notes
@@ -328,42 +327,46 @@ The intrinsics headers are already handled: `<intrin.h>` for MSVC, `<x86intrin.h
 
 ---
 
-
 ## ☕️ Latency Report
 
-### **ASM**
-| Function         | Avg (cycles) | Median (cycles) | StdDev (cycles) | Min (cycles) | Max (cycles) | Δ Min-Max (cycles) |
-|:-----------------|-------------:|----------------:|----------------:|-------------:|-------------:|-------------------:|
-| __rdtsc          | 30.1         | 29.9            | 0.4             | 29.7         | 31.2         | 1.5                |
-| __rdtscp         | 57.7         | 57.5            | 0.9             | 57.3         | 62.6         | 5.2                |
-| _LFENCE          | 14.7         | 14.7            | 0.1             | 14.7         | 15.3         | 0.6                |
+Pinned core, batched RDTSC, AMD Ryzen 5 7600X @ 4.7 GHz, `-O3 -march=native`.  
+> 100k iterations × 100 trials, 1 warm-up batch. 1 cycle ≈ 0.213 ns (4.7GHz).
 
-### **Latte**
-| Function         | Avg (cycles) | Median (cycles) | StdDev (cycles) | Min (cycles) | Max (cycles) | Δ Min-Max (cycles) |
-|:-----------------|-------------:|----------------:|----------------:|-------------:|-------------:|-------------------:|
-| Fast::Start+Stop | 60.1         | 60.0            | 0.1             | 59.9         | 60.4         | 0.5                |
-| Mid::Start+Stop  | 119.8        | 119.7           | 0.4             | 119.9        | 122.7        | 2.8                |
-| Hard::Start+Stop | 175.8        | 175.4           | 0.9             | 175.4        | 179.3        | 3.9                |
-| LATTE_PULSE      | 29.9         | 29.8            | 0.1             | 29.7         | 30.3         | 0.6                |
+**Raw timer cost** (per call; start+stop pairs double these):
 
-### **Chrono**
-| Function         | Avg (cycles) | Median (cycles) | StdDev (cycles) | Min (cycles) | Max (cycles) | Δ Min-Max (cycles) |
-|:-----------------|-------------:|----------------:|----------------:|-------------:|-------------:|-------------------:|
-| std::chrono::now | 153.9        | 153.4           | 0.4             | 153.1        | 156.9        | 3.3                |
+| Timer | Median cycles |
+|---:|---:|
+| `__rdtsc` | 29.9 |
+| `__rdtscp` | 57.5 |
+| `_LFENCE` | 14.7 |
 
-Measurements were computed using:
-- **Batch size:** 100 000 iterations per trial  
-- **Trials:** 100 independent batch
-- **Warm-up:** 1 independent batch
-- **Core:** Pinned
-- **Optimization:** g++ -O3 -march=native
-- **CPU:** AMD Ryzen 5 7600X 6-Core 4.7 GHz (Boost Clock: 5.3 GHz)
+**Latte overhead** (median cycles per region):
 
-Each function’s latency was measured in **CPU cycles** using a high-accuracy timer and batched calls, with initial warm-ups to stabilize branch predictors and caches.
-> For example:
-> - On a **3.5 GHz** core (≈ 3.5 billion cycles/sec), **1 cycle ≈ 0.286 ns**.  
-> - On a **4.0 GHz** core, **1 cycle ≈ 0.250 ns**.  
-> - On a **4.7 GHz** core, **1 cycle ≈ 0.213 ns**.  
->  
-> These conversions come from the fact that clock rate (in hertz) is the number of cycles per second:  
-> `time per cycle = 1 / frequency` (in seconds).
+| Function | Cycles | ns |
+|---:|---:|---:|
+| `Fast::Start+Stop` | 60.0 | 12.8 |
+| `Mid::Start+Stop` | 119.7 | 25.5 |
+| `Hard::Start+Stop` | 175.4 | 37.4 |
+| `LATTE_PULSE` | 29.8 | 6.3 |
+
+**Other tools** (overhead per region, same format):
+
+| Tool | Cycles | ns |
+|---|---:|---:|
+| Caliper `runtime-report` | 1212.8 | 258.0 |
+| Caliper `event-trace` | 1501.8 | 319.5 |
+| Likwid active | 28951 | 6160 |
+| Tracy connected | 75.4 | 16.0 |
+| Tracy always-on | 151.3 | 32.2 |
+| `std::chrono::now` ×2 | 193.0 | 41.1 |
+
+Latte measures latency only; Caliper adds aggregation/tracing, Likwid adds hardware‑counter reads, Tracy adds profiler transport.
+
+**Measurement error** vs ~4 µs workload:
+
+| Tool | bias |
+|---|---:|
+| Latte `Fast` | −10…−20 ns (−0.3…−0.5%) |
+| Caliper `runtime-report` | +257 ns (+6.9%) |
+| Likwid `RDTSC Runtime` | +545 ns (+13.3%) |
+| `std::chrono` | ≈0 |
