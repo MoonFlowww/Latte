@@ -17,12 +17,28 @@
 #include <limits>
 #include <cstring>
 #include <memory>
+#include <queue>
+#include <cstdio>
 
 
 #if defined(_MSC_VER)
 #include <intrin.h>
 #else
 #include <x86intrin.h>
+#endif
+
+#include <thread>
+#include <functional>
+
+#if defined(_MSC_VER)
+#include <windows.h>
+#else
+#include <unistd.h>
+#if defined(__linux__)
+#include <sys/syscall.h>
+#elif defined(__APPLE__)
+#include <pthread.h>
+#endif
 #endif
 
 #define LATTE_PULSE(id_str) \
@@ -172,6 +188,31 @@ namespace Latte {
       const size_t n = sorted.size();
       return (n % 2 == 0) ? (sorted[n/2 - 1] + sorted[n/2]) / 2.0 : sorted[n/2];
     }
+
+    // OS thread id: real kernel tid where available, stable per thread for the
+    // life of the recording. Used to tag every sample in DumpToJson.
+    inline uint64_t CurrentThreadId() {
+#if defined(__linux__)
+      return static_cast<uint64_t>(::syscall(SYS_gettid));
+#elif defined(_MSC_VER)
+      return static_cast<uint64_t>(::GetCurrentThreadId());
+#elif defined(__APPLE__)
+      uint64_t tid = 0;
+      pthread_threadid_np(nullptr, &tid);
+      return tid;
+#else
+      return static_cast<uint64_t>(std::hash<std::thread::id>{}(std::this_thread::get_id()));
+#endif
+    }
+
+    // OS process id, used as the pid field in DumpToJson (Chrome Trace format).
+    inline uint32_t CurrentProcessId() {
+#if defined(_MSC_VER)
+      return static_cast<uint32_t>(::GetCurrentProcessId());
+#else
+      return static_cast<uint32_t>(::getpid());
+#endif
+    }
   }
 
   struct alignas(64) RingBuffer {
@@ -204,6 +245,7 @@ namespace Latte {
     Cycles stack_starts[MAX_ACTIVE_SLOTS];
     uint8_t stack_modes[MAX_ACTIVE_SLOTS]; // Latte::Mode encoded
     size_t stack_ptr = 0;
+    uint64_t tid = 0; // OS thread id, captured once when this storage is created
 
     // pointer comparison
     std::map<ID, RingBuffer> history;
@@ -223,12 +265,7 @@ namespace Latte {
       std::mutex mutex;
       std::vector<ThreadStorage*> thread_buffers;
 
-      double cycles_per_ns = 1.0; //Default: Unknown
-                                  // Reference point for `start` timestamps, set once at the very first
-                                  // Start()/LATTE_PULSE call program-wide (Meyer's-singleton construction
-                                  // timing guarantees this runs before any sample's own start capture).
-                                  // RDTSC is already assumed comparable across cores elsewhere in this file
-                                  // (calibration offsets are computed once and applied to every thread).
+      double cycles_per_ns = 1.0; //means unknown
       Cycles epoch = Intrinsic::RDTSC();
 
       static Manager& Get() { static Manager instance; return instance; }
@@ -296,6 +333,7 @@ namespace Latte {
     static thread_local ThreadStorage* ts = nullptr;
     if (__builtin_expect(!ts, 0)) {
       ts = new ThreadStorage();
+      ts->tid = Internal::CurrentThreadId();
       Manager::Get().Register(ts);
     }
     return ts;
@@ -690,33 +728,69 @@ namespace Latte {
     Manager& mgr = Manager::Get();
     mgr.EnsureCalibrated();
 
-    auto raw_data = mgr.ExtractSamplesGlobal();
-
-    std::ofstream file(path);
-    file << std::fixed << std::setprecision(2);
-    file << "[\n";  // Start array for Vega-Lite
-
-    bool first_row = true;
-    for (auto& [id, samples] : raw_data) {
-      if (samples.empty()) continue;
-
-      for (size_t idx = 0; idx < samples.size(); ++idx) {
-        if (!first_row) file << ",\n";
-        first_row = false;
-
-        const double duration_ns = samples[idx].duration / mgr.cycles_per_ns;
-        const double start_ns = (double)(samples[idx].start - mgr.epoch) / mgr.cycles_per_ns;
-
-        file << "  {\n";
-        file << "    \"component\": \"" << id << "\",\n";
-        file << "    \"sample_index\": " << idx << ",\n";
-        file << "    \"depth\": " << (int)samples[idx].depth << ",\n";
-        file << "    \"start_ns\": " << start_ns << ",\n";
-        file << "    \"duration_ns\": " << duration_ns << "\n";
-        file << "  }";
+    // Snapshot each (thread, id) ring in chronological order: pmu is monotonic per thread,
+    // so reading from top yields sorted
+    struct Track { ID id; uint64_t tid; std::vector<Sample> samples; };
+    std::vector<Track> tracks;
+    {
+      std::lock_guard<std::mutex> lock(mgr.mutex);
+      for (auto* ts : mgr.thread_buffers) {
+        for (auto& [id, rb] : ts->history) {
+          Track t{id, ts->tid, {}};
+          t.samples.reserve(MAX_SAMPLES);
+          for (size_t k = 0; k < MAX_SAMPLES; ++k) {
+            const size_t i = (rb.head + k) & BUFFER_MASK;
+            if (rb.data[i] > 0) t.samples.push_back({rb.data[i], rb.start[i], rb.depth[i]});
+          }
+          if (!t.samples.empty()) tracks.push_back(std::move(t));
+        }
       }
     }
-    file << "\n]\n";
+
+    size_t total = 0;
+    for (auto& t : tracks) total += t.samples.size();
+
+    // K-way merge of sorted tracks by start time: O(N log k), k = #tracks.
+    struct Cursor { Cycles start; uint32_t track; uint32_t idx; };
+    auto later = [](const Cursor& a, const Cursor& b) { return a.start > b.start; };
+    std::priority_queue<Cursor, std::vector<Cursor>, decltype(later)> heap(later);
+    for (uint32_t t = 0; t < tracks.size(); ++t)
+      heap.push({tracks[t].samples[0].start, t, 0});
+
+    std::string out;
+    out.reserve(total * 128 + 16);
+    out += "[\n";
+
+    const double inv_cpns = 1.0 / mgr.cycles_per_ns;
+    const uint32_t pid = Internal::CurrentProcessId();
+    char row[256];
+    while (!heap.empty()) {
+      Cursor c = heap.top(); heap.pop();
+      const Track& t = tracks[c.track];
+      const Sample& s = t.samples[c.idx];
+
+      const double start_ns = (double)(s.start - mgr.epoch) * inv_cpns;
+      const double dur_ns   = (double)s.duration * inv_cpns;
+      // One schema for every sample: a Chrome Trace complete event (ph: "X")
+      // plus the custom fields. A Start/Stop span and a LATTE_PULSE both store
+      // an interval [start, start + duration] — per-call execution time vs.
+      // per-loop-iteration execution time — so no per-row discriminator is
+      // needed; monitoring can treat them identically.
+      const int len = snprintf(row, sizeof(row),
+          "  {\"name\": \"%s\", \"ph\": \"X\", \"pid\": %u, \"tid\": %llu, \"ts\": %.3f, \"dur\": %.3f,"
+          " \"component\": \"%s\", \"sample_index\": %u, \"depth\": %u, \"start_ns\": %.2f, \"duration_ns\": %.2f}",
+          t.id, pid, (unsigned long long)t.tid, start_ns / 1e3, dur_ns / 1e3,
+          t.id, c.idx, (unsigned)s.depth, start_ns, dur_ns);
+      out.append(row, (size_t)len);
+      out += (--total > 0) ? ",\n" : "\n";
+
+      if (c.idx + 1 < t.samples.size())
+        heap.push({t.samples[c.idx + 1].start, c.track, c.idx + 1});
+    }
+    out += "]\n";
+
+    std::ofstream file(path, std::ios::binary);
+    file.write(out.data(), (std::streamsize)out.size());
   }
 
 }
@@ -746,10 +820,9 @@ namespace Latte{
     inline void Start(ID) {} 
     inline void Stop(ID) {} 
   }
-
-  namespace Hard { 
-    inline void Start(ID) {} 
-    inline void Stop(ID) {} 
+  namespace Hard {
+    inline void Start(ID) {}
+    inline void Stop(ID) {}
   }
 
   namespace Parameter {
@@ -772,3 +845,4 @@ namespace Latte{
   inline void DumpToJson(const std::string& path) { (void)path; }
 }
 #endif // LATTE_DISABLE
+

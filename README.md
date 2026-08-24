@@ -1,6 +1,6 @@
 # ☕️ Latte: Ultra-Low Latency C++ Telemetry Framework
 ![GitHub last commit](https://img.shields.io/github/last-commit/MoonFlowww/Latte?logo=github)
-![Unique Cloners](https://img.shields.io/badge/Unique_Cloners-514-blue?logo=github)
+![Unique Cloners](https://img.shields.io/badge/Unique_Cloners-587-blue?logo=github)
 
 Latte is a single-header C++ telemetry library designed for high‑frequency trading, game engines, and real‑time systems where measurement overhead must be measured in nanoseconds rather than microseconds.
 Latte measures **CPU cycles** using x86_64 timestamp counters (RDTSC / RDTSCP) and stores samples in **per‑thread fixed‑size ring buffers** for later reporting.
@@ -118,8 +118,9 @@ Dumps every sample, all threads and components, as a flat JSON array.
 Latte::DumpToJson("dump.json");
 ```
 
+Each element has the shape (a Chrome Trace complete event plus Latte-specific fields):
 ```json
-{ "component": "Sim_OrderFlow", "sample_index": 42, "depth": 2, "start_ns": 1882.44, "duration_ns": 34.72 }
+{ "name": "Sim_OrderFlow", "ph": "X", "pid": 4123, "tid": 58231, "ts": 1.882, "dur": 0.035, "component": "Sim_OrderFlow", "sample_index": 42, "depth": 2, "start_ns": 1882.44, "duration_ns": 34.72 }
 ```
 
 - `sample_index`: position in ring-buffer storage order, not time order. Use `start_ns` for time order.
@@ -140,15 +141,18 @@ Cost of `depth`/`start_ns`, `-O3 -march=native`, pinned core:
 
 ## Visualizing latency data
 
-[`latency.vl.json`](latency.vl.json) is a [Vega-Lite](https://vega.github.io/vega-lite/) icicle/flame chart that reads `dump.json` directly — `x`/`x2` place each sample at `[start_ns, start_ns + duration_ns]`, `y` is `depth`, so nested spans stack under their parents instead of being plotted as unrelated siblings:
+`DumpToJson("dump.json")` writes the [Chrome Trace Event Format](https://docs.google.com/document/d/1CvAClvFfyA5R-PhYUmn5OOQtYMH4h6I0nSsKchNAySU), so the file can be dropped straight into [Perfetto](https://ui.perfetto.dev/) (or `chrome://tracing`) and rendered as a timeline:
 
-![Latte latency icicle/flame chart, zoomed to a few steady-state simulation ticks](latency.png)
+- Every sample — `Start`/`Stop` span or `LATTE_PULSE` — is a complete event (`ph: "X"`), drawn as a horizontal bar from `ts` to `ts + dur`.
+- `pid`/`tid` are real OS ids, so Perfetto shows one process with one lane per thread.
+- Nesting is computed from the bars themselves: a bar whose interval contains another renders as its parent, so nested spans stack under their parents, and a pulse fired inside a span lands inside that span's bar.
+- The custom fields (`component`, `sample_index`, `depth`, `start_ns`, `duration_ns`) ride along for filtering and tooltips.
 
-(zoomed to a handful of ticks — a fresh run spans hours-to-nanoseconds and looks like a blank page until you zoom in; drag on the chart to pan/zoom, it's an interactive `bind: scales` selection)
+Notes:
 
-- `LATTE_PULSE` samples are included at their real depth (e.g. `Sim_AskLoop`/`Sim_BidLoop` here are pulses fired from inside `Sim_OrderFlow`, so they render nested under it) — but a pulse's duration is "time since the last pulse of the same ID," not "time this code was actively executing," so a wide pulse bar means infrequent arrivals, not necessarily a slow call.
-- The x-scale is explicitly `"zero": false` — a Gantt-style time axis should never be forced to include 0.
-- For the full-run **distribution** view (median/outliers per component, the same numbers `DumpToStream` reports), open `latency.vl.json` in the [Vega-Lite Editor](https://vega.github.io/editor/) and swap the mark for `boxplot`/`tick`, or query `dump.json` directly — the icicle view above is for inspecting structure and relative timing, not aggregate stats.
+- A `LATTE_PULSE` bar is one loop iteration's execution time (pulses are used inside loops, once per iteration). Consecutive pulses are contiguous `start_{i+1} = start_i + duration_i`, so a pulse component renders as one fused bar spanning the whole loop; its total width is the loop's total time, and a wide bar means a slow iteration.
+- A fresh run spans hours-to-nanoseconds and looks like a blank page until you zoom in (Perfetto: `A`/`D` pan, `W`/`S` zoom).
+- For the full-run **distribution** view (median/outliers per component, the same numbers `DumpToStream` reports), query `dump.json` directly or run `DumpToStream`; the timeline is for structure and relative timing, not aggregate stats.
 
 ---
 
