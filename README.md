@@ -112,28 +112,29 @@ Mixed-mode calibration:
 - On `Stop()`, calibration/overhead selection is keyed by the `(start_mode, stop_mode)` pair (e.g., Fast×Fast, Fast×Mid, Hard×Mid).
 
 ### 7. Raw sample export: `DumpToJson`
-Write every collected sample, across all threads and components, as a flat JSON array to a file.
-
-```cpp
-Latte::DumpToJson(const std::string& path);
-```
+Dumps every sample, all threads and components, as a flat JSON array.
 
 ```cpp
 Latte::DumpToJson("dump.json");
 ```
 
-Each element has the shape:
 ```json
 { "component": "Sim_OrderFlow", "sample_index": 42, "depth": 2, "start_ns": 1882.44, "duration_ns": 34.72 }
 ```
 
-- `sample_index` is the position of the sample **within its own component's series** (0, 1, 2, ...) in ring-buffer storage order. Once a series wraps past `MAX_SAMPLES`, storage order is no longer chronological — use `start_ns` if you need actual time order.
-- `depth` is the number of `Start()`ed-but-not-yet-`Stop()`ed spans enclosing this sample at the moment it was captured (0 = nothing else open). It's computed the same way for `Start`/`Stop` pairs and for `LATTE_PULSE` — both read the current size of the per-thread call stack, so a pulse fired from inside three nested spans reports depth 3 even though it isn't itself a stack entry.
-- `start_ns` is relative to `Manager::epoch`, a single reference point captured once at the very first instrumented call anywhere in the program (any mode, any thread) — so `start_ns` values are comparable across components and threads, not just within one series. This assumes RDTSC is comparable across cores, which the file already relies on elsewhere (the global calibration offsets are computed once and applied to every thread).
-- Samples are **not calibrated**: no overhead subtraction and no `Internal::CleanData` outlier filtering are applied (unlike `DumpToStream`), since the export is meant as raw material for downstream analysis.
-- If `path` cannot be opened for writing (e.g. the parent directory doesn't exist), the call fails silently and no file is produced — check for the file's existence if that matters to your pipeline.
+- `sample_index`: position in ring-buffer storage order, not time order. Use `start_ns` for time order.
+- `depth`: spans open (`Start()`ed, not `Stop()`ed) at capture time. Applies to `LATTE_PULSE` too.
+- `start_ns`: relative to `Manager::epoch` (first instrumented call in the program). Comparable across threads and components.
+- Raw values — no overhead subtraction, no outlier filtering.
+- Bad `path` fails silently, no file written.
 
-Cost of capturing `depth`/`start_ns`: `Recorder::Stop` and `LATTE_PULSE` already had both values in local state (the stack index and the RDTSC value taken at `Start()`), so writing them out is two extra stores per sample — measured median Start+Stop and `LATTE_PULSE` cost is unchanged (94.0 / 48.0 cycles, before and after, `-O3 -march=native`, pinned core). The real cost is memory: `sizeof(RingBuffer)` grows from 512.4 KiB to 1088 KiB (+112.5%) per unique `(thread, component)` pair, since `start`/`depth` are stored as parallel arrays alongside the existing `data` array. Only allocated lazily for IDs actually used, but it isn't free.
+Cost of `depth`/`start_ns`, `-O3 -march=native`, pinned core:
+
+| Metric | Before | After | Delta |
+|---|---|---|---|
+| Start+Stop (median cycles) | 94.0 | 94.0 | 0% |
+| `LATTE_PULSE` (median cycles) | 48.0 | 48.0 | 0% |
+| `RingBuffer` size, per `(thread, component)` | 512.4 KiB | 1088 KiB | +112.5% |
 
 ---
 
