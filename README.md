@@ -358,15 +358,14 @@ Pinned core, batched RDTSC, AMD Ryzen 5 7600X @ 4.7 GHz, `-O3 -march=native`.
 | Likwid active | 28951 | 6160 |
 | Tracy connected | 75.4 | 16.0 |
 | Tracy always-on | 151.3 | 32.2 |
-| `std::chrono::now` ×2 | 193.0 | 41.1 |
+| `std::chrono::now` x2 | 193.0 | 41.1 |
 
 Latte measures latency only; Caliper adds aggregation/tracing, Likwid adds hardware‑counter reads, Tracy adds profiler transport.
 
 **Measurement error** vs ~4 µs workload:
 
 | Tool | bias |
-|---|---:|
-| Latte `Fast` | −10…−20 ns (−0.3…−0.5%) |
+|---|---|
+| Latte `Fast` | −15 ns (-0.3%) |
 | Caliper `runtime-report` | +257 ns (+6.9%) |
 | Likwid `RDTSC Runtime` | +545 ns (+13.3%) |
-| `std::chrono` | ≈0 |
