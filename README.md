@@ -366,6 +366,6 @@ Latte measures latency only; Caliper adds aggregation/tracing, Likwid adds hardw
 
 | Tool | bias |
 |---|---|
-| Latte `Fast` | −15 ns (-0.3%) |
+| Latte `Fast` | -15 ns (-0.3%) |
 | Caliper `runtime-report` | +257 ns (+6.9%) |
 | Likwid `RDTSC Runtime` | +545 ns (+13.3%) |
