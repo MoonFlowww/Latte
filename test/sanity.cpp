@@ -238,6 +238,27 @@ int main() {
     CHECK(Latte::GetThreadStorage()->stack_ptr == depth_before);
   }
 
+  // LATTE_FIELD must run expr, return its value, and record a sample under
+  // __func__ ("main" here) - not the stringified expr text.
+  {
+    auto add = [](int a, int b) { return a + b; };
+    auto before = Latte::Manager::Get().ExtractSamplesGlobal()["main"].size();
+    int out = LATTE_FIELD(add(19, 23));
+    CHECK(out == 42);
+    auto after = Latte::Manager::Get().ExtractSamplesGlobal()["main"].size();
+    CHECK(after == before + 1);
+  }
+
+  // LATTE_FIELD preserves value category: an lvalue expr comes back as a
+  // reference to the same object, not a copy.
+  {
+    int v = 7;
+    int& r = LATTE_FIELD(v);
+    r = 9;
+    CHECK(v == 9);
+    CHECK(&r == &v);
+  }
+
   std::cout << "sanity (enabled build): " << g_checks << " checks passed\n";
   return 0;
 }
@@ -263,6 +284,7 @@ int main() {
   {
     LATTE_RAII(Hard);
   }
+  CHECK(LATTE_FIELD(1 + 1) == 2);
 
   CHECK(Latte::Snapshot("x").empty());
   CHECK(Latte::FormatTime(123.0).empty());
