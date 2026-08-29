@@ -3,8 +3,6 @@
 ![GitHub last commit](https://img.shields.io/github/last-commit/MoonFlowww/Latte?logo=github)
 ![Unique Cloners](https://img.shields.io/badge/Unique_Cloners-587-blue?logo=github)
 
-## Project description
-
 Single header C++17 telemetry library.
 Goal: least possible overhead, an API you can use in one line, and built in statistics.
 
@@ -13,8 +11,6 @@ Goal: least possible overhead, an API you can use in one line, and built in stat
 - Latency only, no aggregation, no tracing transport, no hardware counters.
 - Header only, no build step, no linking.
 - Compile with `LATTE_DISABLE` defined to strip every call to a no-op. Ship the same call sites in debug and release.
-
-Targets HFT, game engines, and other latency sensitive systems.
 
 ---
 
