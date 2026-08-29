@@ -156,6 +156,18 @@ void ProcessOrder() {
   enclosing function's.
 - Nesting follows ordinary C++ destruction order (LIFO), same as manual `Start`/`Stop`.
 
+### 9. `LATTE_FIELD(expr)` (time an expression, keep its result)
+Runs `expr`. Times it in Fast mode. Returns its result unchanged. `id` is `__func__`, not the expr text.
+
+```cpp
+int out = LATTE_FIELD(Compute(x, y)); // records under the caller's function name
+```
+
+- `expr` can be any call, with any inputs — args flow through normally.
+- Result keeps its value category: an lvalue result comes back as a reference, not a copy.
+- Always Fast mode. No mode argument.
+- Inside a lambda, `__func__` is `"operator()"` — same rule as `LATTE_RAII`.
+
 ---
 
 ## Visualizing latency data

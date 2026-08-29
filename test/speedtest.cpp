@@ -170,6 +170,13 @@ int main() {
   std::cout << "+-------------------------+----------+----------+----------+----------+----------+----------+----------+" << std::endl;
 
 
+  auto r_field = BENCHMARK("LATTE_FIELD", {
+    do_not_optimize(LATTE_FIELD(1));
+  });
+  PrintResult(*r_field, r_baseline->med);
+  std::cout << "+-------------------------+----------+----------+----------+----------+----------+----------+----------+" << std::endl;
+
+
   auto r_chrono = BENCHMARK("std::chrono::now()", {
     auto t1 = std::chrono::high_resolution_clock::now();
     auto t2 = std::chrono::high_resolution_clock::now();

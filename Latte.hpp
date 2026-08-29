@@ -461,6 +461,14 @@ struct ScopeGuard {
   ScopeGuard& operator=(const ScopeGuard&) = delete;
 };
 
+namespace Internal {
+  template <void (*StartF)(ID), void (*StopF)(ID), class F>
+  __attribute__((always_inline)) inline decltype(auto) TimedEval(ID id, F&& f) {
+    ScopeGuard<StartF, StopF> _g(id);
+    return static_cast<F&&>(f)();
+  }
+}
+
 inline void Manager::Calibrate() {
   {
     LATTE_FREQ(cycles_per_ns);
@@ -968,6 +976,10 @@ inline void DumpToJson(const std::string& path) {
       __func__                                   \
     }
 
+  #define LATTE_FIELD(expr)                                             \
+    ::Latte::Internal::TimedEval<::Latte::Fast::Start, ::Latte::Fast::Stop>( \
+        __func__, [&]() -> decltype(auto) { return (expr); })
+
 
 #else  // LATTE_DISABLE defined
   #include <cstdint>
@@ -993,6 +1005,8 @@ inline void DumpToJson(const std::string& path) {
   #define LATTE_RAII(mode) \
     do {                   \
     } while (0)  // statement position only
+
+  #define LATTE_FIELD(expr) (expr)
 
 
 namespace Latte {
