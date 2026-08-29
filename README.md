@@ -257,6 +257,8 @@ Latte uses a per-thread stack to support nesting:
 
 **Best practice:** always pair Start/Stop in strict LIFO order and pass the same ID for readability.
 Prefer `LATTE_RAII(mode)` over manual pairs where possible, an early `return` or exception between a manual `Start`/`Stop` pair leaves the stack unbalanced
+
+
 ---
 
 ## Thread-safety
