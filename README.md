@@ -176,12 +176,12 @@ Median cycles per region, single call unless noted (Start+Stop pairs double the 
 | Latte | `Mid::Start+Stop` | 119.7 | 25.5 |
 | Latte | `Hard::Start+Stop` | 175.4 | 37.4 |
 | Latte | `LATTE_PULSE` | 29.8 | 6.3 |
-| Other tool | Caliper runtime report | 1212.8 | 258.0 |
-| Other tool | Caliper event trace | 1501.8 | 319.5 |
-| Other tool | Likwid active | 28951 | 6160 |
-| Other tool | Tracy connected | 75.4 | 16.0 |
-| Other tool | Tracy always on | 151.3 | 32.2 |
-| Other tool | `std::chrono::now` x2 | 193.0 | 41.1 |
+| Caliper | Caliper runtime report | 1212.8 | 258.0 |
+| Caliper | Caliper event trace | 1501.8 | 319.5 |
+| Likwid | Likwid active | 28951 | 6160 |
+| Tracy | Tracy connected | 75.4 | 16.0 |
+| Tracy | Tracy always on | 151.3 | 32.2 |
+| std::chrono | `std::chrono::now` x2 | 193.0 | 41.1 |
 
 Latte measures latency only. Caliper adds aggregation and tracing. Likwid adds hardware counter reads. Tracy adds profiler transport.
 
