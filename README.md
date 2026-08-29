@@ -349,7 +349,7 @@ Pinned core, batched RDTSC, AMD Ryzen 5 7600X @ 4.7 GHz, `-O3 -march=native`.
 | `Hard::Start+Stop` | 175.4 | 37.4 |
 | `LATTE_PULSE` | 29.8 | 6.3 |
 
-**Other tools** (overhead per region, same format):
+**Other tools overhead** (median cycles per region):
 
 | Tool | Cycles | ns |
 |---|---:|---:|
