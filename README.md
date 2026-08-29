@@ -26,14 +26,19 @@ Goal: least possible overhead, an API you can use in one line, and built in stat
 | `Mid` | `__rdtscp` | partial barrier | default function profiling |
 | `Hard` | `lfence` + `__rdtscp` | full serialize | tiny snippets, few dozen cycles |
 
-**`Latte::Fast::Start(id)` / `Latte::Fast::Stop(id)`** (same for `Mid`, `Hard`), manual pair, any block:
+#### `Latte::Fast::Start(id)` / `Latte::Fast::Stop(id)`
+
+Manual pair, any block (same API for `Mid`, `Hard`):
+
 ```cpp
 Latte::Fast::Start("ProcessOrder");
 // work
 Latte::Fast::Stop("ProcessOrder");
 ```
-`id` is a string literal, no registration needed.
-Nesting works up to 64 active slots per thread, any mix of modes:
+
+- `id` is a string literal, no registration needed.
+- Nesting works up to 64 active slots per thread, any mix of modes:
+
 ```cpp
 Latte::Fast::Start("Frame_Total");
 Latte::Mid::Start("Physics_Engine");
@@ -41,7 +46,10 @@ Latte::Mid::Stop("Physics_Engine");
 Latte::Fast::Stop("Frame_Total");
 ```
 
-**`LATTE_RAII(mode)`**, scope guard. Start on construction, Stop on scope exit, return, or exception:
+#### `LATTE_RAII(mode)`
+
+Scope guard. Start on construction, Stop on scope exit, return, or exception:
+
 ```cpp
 void ProcessOrder() {
     LATTE_RAII(); // Fast mode, id = __func__
@@ -49,66 +57,96 @@ void ProcessOrder() {
     // work
 }
 ```
-`LATTE_RAII()` defaults to Fast. `LATTE_RAII(Mid)` and `LATTE_RAII(Hard)` pick a mode.
-Inside a lambda, `__func__` is `"operator()"`, not the enclosing function name.
-Nesting follows normal C++ destruction order (LIFO), same as manual Start/Stop.
-Prefer this over manual Start/Stop: an early return or exception between a manual pair leaves the stack unbalanced.
 
-**`LATTE_FIELD(expr)`**, runs `expr`, times it in Fast mode, returns its result unchanged:
+- Defaults to Fast. `LATTE_RAII(Mid)` and `LATTE_RAII(Hard)` pick a mode.
+- Inside a lambda, `__func__` is `"operator()"`, not the enclosing function name.
+- Nesting follows normal C++ destruction order (LIFO), same as manual Start/Stop.
+- Prefer this over manual Start/Stop: an early return or exception between a manual pair leaves the stack unbalanced.
+
+#### `LATTE_FIELD(expr)`
+
+Runs `expr`, times it in Fast mode, returns its result unchanged:
+
 ```cpp
 int out = LATTE_FIELD(Compute(x, y)); // recorded under the caller's __func__
 ```
-`expr` can be any call, with any inputs, arguments flow through normally.
-Result keeps its value category: an lvalue result comes back as a reference, not a copy.
-Always Fast mode, no mode argument. Inside a lambda, `__func__` is `"operator()"`, same rule as `LATTE_RAII`.
 
-**`LATTE_PULSE(id)`**, cycle delta between successive calls, same thread. Used inside loops:
+- `expr` can be any call, with any inputs, arguments flow through normally.
+- Result keeps its value category: an lvalue result comes back as a reference, not a copy.
+- Always Fast mode, no mode argument. Inside a lambda, `__func__` is `"operator()"`, same rule as `LATTE_RAII`.
+
+#### `LATTE_PULSE(id)`
+
+Cycle delta between successive calls, same thread. Used inside loops:
+
 ```cpp
 for (;;) {
     // poll or process
     LATTE_PULSE("Toroidal_Record");
 }
 ```
-First call sets the reference point, pushes no sample.
+
+- First call sets the reference point, pushes no sample.
 
 ### Runtime extraction
 
-**`Latte::Snapshot(id)`**, pull raw cycle samples for one ID, across all threads, at any point at runtime:
+#### `Latte::Snapshot(id)`
+
+Pull raw cycle samples for one ID, across all threads, at any point at runtime:
+
 ```cpp
 std::vector<Latte::Cycles> samples = Latte::Snapshot("Physics_Engine");
 ```
 
-**`LATTE_FREQ(cycles_per_ns)`**, estimates the CPU's cycles per nanosecond, writes it into the variable you pass:
+#### `LATTE_FREQ(cycles_per_ns)`
+
+Estimates the CPU's cycles per nanosecond, writes it into the variable you pass:
+
 ```cpp
 double cpns;
 LATTE_FREQ(cpns); // ~120 ms measurement against CLOCK_MONOTONIC_RAW
 ```
-`DumpToStream` and `DumpToJson` call this internally the first time they need calibrated time. You only call it yourself if you need `cycles_per_ns` outside a dump.
 
-**`Latte::FormatTime(ns)`**, translation helper, turns a raw nanosecond value into a human string with the right unit:
+- `DumpToStream` and `DumpToJson` call this internally the first time they need calibrated time.
+- You only call it yourself if you need `cycles_per_ns` outside a dump.
+
+#### `Latte::FormatTime(ns)`
+
+Translation helper, turns a raw nanosecond value into a human string with the right unit:
+
 ```cpp
 std::string s = Latte::FormatTime(1882.44); // "1.88 us"
 ```
-Picks ns, us, ms, s, or min based on magnitude. Used internally by `DumpToStream` in `Parameter::Time` mode.
+
+- Picks ns, us, ms, s, or min based on magnitude.
+- Used internally by `DumpToStream` in `Parameter::Time` mode.
 
 ### Dumping data
 
-**`Latte::DumpToStream`**, human readable report, call once after all worker threads finish instrumenting:
+#### `Latte::DumpToStream`
+
+Human readable report, call once after all worker threads finish instrumenting:
+
 ```cpp
 Latte::DumpToStream(std::cout, Latte::Parameter::Time, Latte::Parameter::Calibrated);
 ```
-Defaults: `Parameter::Cycle`, `Parameter::Raw`.
-Calibrated mode subtracts measured Start/Stop overhead per mode pair before computing stats, and prints that overhead as a second table.
 
-**`Latte::DumpToJson`**, flat Chrome Trace JSON array, every sample, all threads:
+- Defaults: `Parameter::Cycle`, `Parameter::Raw`.
+- Calibrated mode subtracts measured Start/Stop overhead per mode pair before computing stats, and prints that overhead as a second table.
+
+#### `Latte::DumpToJson`
+
+Flat Chrome Trace JSON array, every sample, all threads:
+
 ```cpp
 Latte::DumpToJson("dump.json");
 ```
-Drop the file into Perfetto (ui.perfetto.dev) or chrome://tracing.
-Each bar spans `ts` to `ts + dur`. Nesting is computed from bar overlap, one lane per real OS thread id.
-A `LATTE_PULSE` bar is one loop iteration. Consecutive pulses form one fused bar spanning the whole loop.
-Raw values only, no overhead subtraction, no outlier filtering.
-Zoom in first (`W`/`S` in Perfetto): a fresh run spans hours to nanoseconds and looks blank until you do.
+
+- Drop the file into Perfetto (ui.perfetto.dev) or chrome://tracing.
+- Each bar spans `ts` to `ts + dur`. Nesting is computed from bar overlap, one lane per real OS thread id.
+- A `LATTE_PULSE` bar is one loop iteration. Consecutive pulses form one fused bar spanning the whole loop.
+- Raw values only, no overhead subtraction, no outlier filtering.
+- Zoom in first (`W`/`S` in Perfetto): a fresh run spans hours to nanoseconds and looks blank until you do.
 
 ---
 
