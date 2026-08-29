@@ -17,13 +17,16 @@
 #include "../Latte.hpp"
 
 static int g_checks = 0;
-#define CHECK(cond) do { \
-  ++g_checks; \
-  if (!(cond)) { \
-    std::cerr << "FAIL " << __FILE__ << ":" << __LINE__ << "  " << #cond << "\n"; \
-    std::exit(1); \
-  } \
-} while (0)
+#define CHECK(cond)                                                        \
+  do {                                                                     \
+    ++g_checks;                                                            \
+    if (!(cond)) {                                                         \
+      std::cerr << "FAIL " << __FILE__ << ":" << __LINE__ << "  " << #cond \
+                << "\n";                                                   \
+      std::exit(1);                                                        \
+    }                                                                      \
+  } while (0)
+
 
 #ifndef LATTE_DISABLE
 
@@ -32,6 +35,7 @@ static void busy_spin(int iters) {
   for (int i = 0; i < iters; ++i) sink += i;
   (void)sink;
 }
+
 
 int main() {
   // Unknown/never-recorded ID must yield an empty snapshot, not a crash.
@@ -67,7 +71,9 @@ int main() {
   // DumpToStream must not throw/crash on both raw and calibrated views.
   std::ostringstream oss;
   Latte::DumpToStream(oss, Latte::Parameter::Time, Latte::Parameter::Raw);
-  Latte::DumpToStream(oss, Latte::Parameter::Cycle, Latte::Parameter::Calibrated);
+  Latte::DumpToStream(
+      oss, Latte::Parameter::Cycle, Latte::Parameter::Calibrated
+  );
   CHECK(!oss.str().empty());
 
   // Multiple threads registering and recording concurrently must not corrupt
@@ -100,14 +106,14 @@ int main() {
   // Depth must equal the number of currently-open spans, for both Start/Stop
   // and LATTE_PULSE (a pulse fired from inside N nested spans is not itself
   // a stack entry, but must still report depth N).
-  Latte::Hard::Start("depth_outer");   // depth 0
-  Latte::Mid::Start("depth_middle");   // depth 1
-  Latte::Fast::Start("depth_inner");   // depth 2
+  Latte::Hard::Start("depth_outer");  // depth 0
+  Latte::Mid::Start("depth_middle");  // depth 1
+  Latte::Fast::Start("depth_inner");  // depth 2
   // LATTE_PULSE is keyed by call site (each source line owns its own static
   // state), so it must be called repeatedly from the same line to produce a
   // sample: the first call only primes it, the second measures the gap.
   for (int i = 0; i < 2; ++i) {
-    LATTE_PULSE("depth_pulse");        // depth 3 (3 spans open: outer, middle, inner)
+    LATTE_PULSE("depth_pulse");  // depth 3 (3 spans open: outer, middle, inner)
   }
   Latte::Fast::Stop("depth_inner");
   Latte::Mid::Stop("depth_middle");
@@ -122,7 +128,10 @@ int main() {
 
     // start must be non-decreasing across a sequential (non-wrapped) series.
     for (size_t i = 1; i < samples.at("sanity_component").size(); ++i) {
-      CHECK(samples.at("sanity_component")[i].start >= samples.at("sanity_component")[i - 1].start);
+      CHECK(
+          samples.at("sanity_component")[i].start >=
+          samples.at("sanity_component")[i - 1].start
+      );
     }
   }
 
@@ -135,11 +144,16 @@ int main() {
   {
     std::ifstream f(json_path);
     CHECK(f.good());
-    std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    std::string content(
+        (std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()
+    );
     CHECK(!content.empty());
     size_t first = content.find_first_not_of(" \t\r\n");
     size_t last = content.find_last_not_of(" \t\r\n");
-    CHECK(first != std::string::npos && content[first] == '[' && content[last] == ']');
+    CHECK(
+        first != std::string::npos && content[first] == '[' &&
+        content[last] == ']'
+    );
     CHECK(content.find("\"depth\"") != std::string::npos);
     CHECK(content.find("\"start_ns\"") != std::string::npos);
     CHECK(content.find("\"duration_ns\"") != std::string::npos);
@@ -164,21 +178,91 @@ int main() {
   Latte::DumpToJson(bad_path);
   CHECK(!std::ifstream(bad_path).good());
 
+  // LATTE_RAII: Start on construction, Stop on scope exit -> exactly one
+  // sample per call, regardless of mode. Id is __func__ ("main" here).
+  {
+    auto before = Latte::Manager::Get().ExtractSamplesGlobal()["main"].size();
+    {
+      LATTE_RAII();
+      busy_spin(100);
+    }
+    auto after = Latte::Manager::Get().ExtractSamplesGlobal()["main"].size();
+    CHECK(after == before + 1);
+  }
+  {
+    auto before = Latte::Manager::Get().ExtractSamplesGlobal()["main"].size();
+    {
+      LATTE_RAII(Hard);
+      busy_spin(100);
+    }
+    auto after = Latte::Manager::Get().ExtractSamplesGlobal()["main"].size();
+    CHECK(after == before + 1);
+  }
+
+  // LATTE_RAII must still Stop() on an early return, keeping the per-thread
+  // stack balanced (the failure mode manual Start/Stop can't guard against).
+  // Inside a lambda, __func__ is the closure's call operator name
+  // ("operator()"), not the enclosing function's - that's the id recorded.
+  auto raii_early_return = [](bool early) -> int {
+    LATTE_RAII(Mid);
+    if (early) return 1;
+    busy_spin(10);
+    return 2;
+  };
+  {
+    const size_t depth_before = Latte::GetThreadStorage()->stack_ptr;
+    auto before =
+        Latte::Manager::Get().ExtractSamplesGlobal()["operator()"].size();
+    CHECK(raii_early_return(true) == 1);
+    CHECK(raii_early_return(false) == 2);
+    CHECK(Latte::GetThreadStorage()->stack_ptr == depth_before);
+    auto after =
+        Latte::Manager::Get().ExtractSamplesGlobal()["operator()"].size();
+    CHECK(after == before + 2);
+  }
+
+  // Nested LATTE_RAII spans across different modes must pop in LIFO order
+  // and leave the stack balanced.
+  {
+    const size_t depth_before = Latte::GetThreadStorage()->stack_ptr;
+    {
+      LATTE_RAII(Hard);
+      {
+        LATTE_RAII(Mid);
+        {
+          LATTE_RAII();
+          busy_spin(10);
+        }
+      }
+    }
+    CHECK(Latte::GetThreadStorage()->stack_ptr == depth_before);
+  }
+
   std::cout << "sanity (enabled build): " << g_checks << " checks passed\n";
   return 0;
 }
 
-#else // LATTE_DISABLE
+
+#else  // LATTE_DISABLE
 
 int main() {
   // In a disabled build every entry point must be a true no-op: it must
   // compile with the same call sites as the enabled build (this is itself
   // part of the check) and must never touch state or crash.
-  Latte::Fast::Start("x"); Latte::Fast::Stop("x");
-  Latte::Mid::Start("x");  Latte::Mid::Stop("x");
-  Latte::Hard::Start("x"); Latte::Hard::Stop("x");
+  Latte::Fast::Start("x");
+  Latte::Fast::Stop("x");
+  Latte::Mid::Start("x");
+  Latte::Mid::Stop("x");
+  Latte::Hard::Start("x");
+  Latte::Hard::Stop("x");
   LATTE_PULSE("x");
   LATTE_CALIBRATE();
+  {
+    LATTE_RAII();
+  }
+  {
+    LATTE_RAII(Hard);
+  }
 
   CHECK(Latte::Snapshot("x").empty());
   CHECK(Latte::FormatTime(123.0).empty());
@@ -191,5 +275,6 @@ int main() {
   std::cout << "sanity (disabled build): " << g_checks << " checks passed\n";
   return 0;
 }
+
 
 #endif

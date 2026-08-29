@@ -139,6 +139,25 @@ Cost of `depth`/`start_ns`, `-O3 -march=native`, pinned core:
 
 ---
 
+### 8. `LATTE_RAII(mode)` (scope guard)
+Start on ctor, Stop on scope exit, exception, or fallthrough. `id` is captured automatically from `__func__`. `mode` is `Fast`/`Mid`/`Hard` and defaults to `Fast` when omitted.
+
+```cpp
+void ProcessOrder() {
+    LATTE_RAII(); // Fast mode, __func__ = "ProcessOrder"
+    if (SomeCondition()) return; // Stop() fires at runtime exit
+    // Core logic execution here
+}
+```
+
+- `LATTE_RAII()` — Fast mode.
+- `LATTE_RAII(Mid)` / `LATTE_RAII(Hard)` — explicit mode.
+- Inside a lambda, `__func__` is the closure's call operator name (`"operator()"`), not the
+  enclosing function's.
+- Nesting follows ordinary C++ destruction order (LIFO), same as manual `Start`/`Stop`.
+
+---
+
 ## Visualizing latency data
 
 `DumpToJson("dump.json")` writes the [Chrome Trace Event Format](https://docs.google.com/document/d/1CvAClvFfyA5R-PhYUmn5OOQtYMH4h6I0nSsKchNAySU), so the file can be dropped straight into [Perfetto](https://ui.perfetto.dev/) (or `chrome://tracing`) and rendered as a timeline:
@@ -237,7 +256,7 @@ Latte uses a per-thread stack to support nesting:
 - `Stop()` on an empty stack returns without recording.
 
 **Best practice:** always pair Start/Stop in strict LIFO order and pass the same ID for readability.
-
+Prefer `LATTE_RAII(mode)` over manual pairs where possible, an early `return` or exception between a manual `Start`/`Stop` pair leaves the stack unbalanced
 ---
 
 ## Thread-safety
