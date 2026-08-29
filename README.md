@@ -135,43 +135,27 @@ Zoom in first (`W`/`S` in Perfetto): a fresh run spans hours to nanoseconds and 
 
 From the first recorded sample to a printed report or a JSON file:
 
-```
-Latte::Fast::Start("id")
-    |
-    v
-GetThreadStorage() -- first call on this thread --> new ThreadStorage, Manager::Register()
-    |                                                (global mutex, pointer list only)
-    v
-push id + RDTSC() + mode onto thread's stack   [stack_ids/stack_starts/stack_modes, depth <= 64]
-    |
-    .  (work happens here)
-    |
-Latte::Fast::Stop("id")
-    |
-    v
-pop stack (LIFO) --> delta = now - start
-    |
-    v
-ThreadStorage::history[id]  (per thread, per ID RingBuffer, alignas(64), 65536 slots, overwrite on wrap)
-    |
-    |   ... repeat Start/Stop/LATTE_PULSE/LATTE_RAII/LATTE_FIELD across all threads while the program runs ...
-    |
-    v
-Snapshot(id) / DumpToStream() / DumpToJson()   -- call after threads join or hit a barrier --
-    |
-    +--> EnsureCalibrated() [first Time/Calibrated dump only]
-    |        Manager::Calibrate(): runs Start/Stop pairs back to back for every (mode, mode)
-    |        combo and for LATTE_PULSE, takes the bucket min median (BUMED) of each run,
-    |        stores it in calib_offsets[9 keys], and measures cycles_per_ns via LATTE_FREQ.
-    |
-    +--> Internal::CleanData() [DumpToStream only]
-    |        bucket samples by 1000, IQR on bucket maxima, flag samples above cutoff as
-    |        OUTLIER, compute avg/median/stddev/skew/min/max/range on what remains.
-    |
-    +--> DumpToStream: prints the stats table (+ overhead table if calibrated) to the stream.
-    |
-    +--> DumpToJson: writes one Chrome Trace event per raw sample, no cleaning, no overhead
-             subtraction, tagged with sample_index, depth, start_ns, duration_ns.
+```mermaid
+flowchart TD
+    A["Start(id, mode)"] --> D["push id + RDTSC + mode<br/>onto per thread stack<br/>(depth <= 64)"]
+    D --> E["user code"]
+    E --> F["Stop(id, mode)"]
+    F --> G["pop stack (LIFO)<br/>delta = now - start"]
+    G --> H["RingBuffer[thread][id]<br/>65536 slots, overwrite on wrap"]
+    H -.->|"repeat: Start/Stop,<br/>LATTE_PULSE, LATTE_RAII, LATTE_FIELD"| A
+
+    H --> S1["Snapshot(id)"]
+    S1 --> S2["read one RingBuffer<br/>cycles only, one ID"]
+
+    H --> T1["DumpToStream(os, unit, mode)"]
+    T1 --> T2["merge calib_key per ID<br/>conflict -> MIXED"]
+    T2 --> T3["if Time/Calibrated:<br/>Calibrate() -> calib_offsets, cycles_per_ns"]
+    T3 --> T4["CleanData(): bucket-max IQR<br/>drop outliers, subtract offsets -> stats table"]
+
+    H --> J1["DumpToJson(path)"]
+    J1 --> J2["EnsureCalibrated() -> cycles_per_ns"]
+    J2 --> J3["snapshot each RingBuffer<br/>in chronological order"]
+    J3 --> J4["k-way merge tracks by start time<br/>one JSON event per sample"]
 ```
 
 ---
@@ -181,33 +165,23 @@ Snapshot(id) / DumpToStream() / DumpToJson()   -- call after threads join or hit
 Pinned core, AMD Ryzen 5 7600X @ 4.7GHz, `-O3 -march=native`.
 100k iterations x 100 trials, 1 warmup batch. 1 cycle is about 0.213ns.
 
-Raw timer cost per call (Start+Stop pairs double these):
+Median cycles per region, single call unless noted (Start+Stop pairs double the raw timer rows):
 
-| Timer | Median cycles |
-|---:|---:|
-| `__rdtsc` | 29.9 |
-| `__rdtscp` | 57.5 |
-| `_LFENCE` | 14.7 |
-
-Latte overhead, median cycles per region:
-
-| Function | Cycles | ns |
-|---:|---:|---:|
-| `Fast::Start+Stop` | 60.0 | 12.8 |
-| `Mid::Start+Stop` | 119.7 | 25.5 |
-| `Hard::Start+Stop` | 175.4 | 37.4 |
-| `LATTE_PULSE` | 29.8 | 6.3 |
-
-Other tools, median cycles per region:
-
-| Tool | Cycles | ns |
-|---|---:|---:|
-| Caliper runtime report | 1212.8 | 258.0 |
-| Caliper event trace | 1501.8 | 319.5 |
-| Likwid active | 28951 | 6160 |
-| Tracy connected | 75.4 | 16.0 |
-| Tracy always on | 151.3 | 32.2 |
-| `std::chrono::now` x2 | 193.0 | 41.1 |
+| Kind | Region | Cycles | ns |
+|---|---|---:|---:|
+| Raw timer | `__rdtsc` | 29.9 | 6.4 |
+| Raw timer | `__rdtscp` | 57.5 | 12.2 |
+| Raw timer | `_LFENCE` | 14.7 | 3.1 |
+| Latte | `Fast::Start+Stop` | 60.0 | 12.8 |
+| Latte | `Mid::Start+Stop` | 119.7 | 25.5 |
+| Latte | `Hard::Start+Stop` | 175.4 | 37.4 |
+| Latte | `LATTE_PULSE` | 29.8 | 6.3 |
+| Other tool | Caliper runtime report | 1212.8 | 258.0 |
+| Other tool | Caliper event trace | 1501.8 | 319.5 |
+| Other tool | Likwid active | 28951 | 6160 |
+| Other tool | Tracy connected | 75.4 | 16.0 |
+| Other tool | Tracy always on | 151.3 | 32.2 |
+| Other tool | `std::chrono::now` x2 | 193.0 | 41.1 |
 
 Latte measures latency only. Caliper adds aggregation and tracing. Likwid adds hardware counter reads. Tracy adds profiler transport.
 
@@ -218,14 +192,6 @@ Measurement error vs a 4µs workload:
 | Latte Fast | -15ns (-0.3%) |
 | Caliper runtime report | +257ns (+6.9%) |
 | Likwid RDTSC Runtime | +545ns (+13.3%) |
-
-Cost of `depth`/`start_ns` fields in `DumpToJson`, `-O3 -march=native`, pinned core:
-
-| Metric | Before | After | Delta |
-|---|---|---|---|
-| Start+Stop (median cycles) | 94.0 | 94.0 | 0% |
-| `LATTE_PULSE` (median cycles) | 48.0 | 48.0 | 0% |
-| `RingBuffer` size, per `(thread, component)` | 512.4 KiB | 1088 KiB | +112.5% |
 
 ---
 
