@@ -462,8 +462,30 @@ struct ScopeGuard {
 };
 
 namespace Internal {
+  // Latte IDs are keyed by address, so each LATTE_FIELD expansion needs its
+  // own stable buffer. The closure type of the per-expansion lambda makes the
+  // static storage unique per call site.
+  template <class F>
+  struct FieldId {
+    // Parse the stringized call: keep everything up to the first '(' (or the
+    // whole trimmed expression when there is none), capped at 128 chars.
+    static const char* Get(const char* expr) {
+      static char buf[128];
+      size_t n = 0;
+      const char* p = expr;
+      while (*p == ' ' || *p == '\t') ++p;
+      while (*p && *p != '(' && n + 1 < sizeof(buf)) buf[n++] = *p++;
+      while (n > 0 && (buf[n - 1] == ' ' || buf[n - 1] == '\t')) --n;
+      buf[n] = '\0';
+      return buf;
+    }
+  };
+
   template <void (*StartF)(ID), void (*StopF)(ID), class F>
-  __attribute__((always_inline)) inline decltype(auto) TimedEval(ID id, F&& f) {
+  __attribute__((always_inline)) inline decltype(auto) TimedEval(
+      const char* expr, F&& f
+  ) {
+    static const char* id = FieldId<F>::Get(expr);
     ScopeGuard<StartF, StopF> _g(id);
     return static_cast<F&&>(f)();
   }
@@ -589,8 +611,44 @@ inline void Manager::Calibrate() {
   }
 }
 
-inline std::vector<Cycles> Snapshot(ID id) {
-  return Manager::Get().ExtractRaw(id);
+// Translate raw TSC durations to nanoseconds through the calibrated CPU
+// frequency. Calibrates once, lazily, on first use (about 120 ms); the cached
+// factor is the same one DumpToStream and DumpToJson use internally.
+// @param samples raw durations as returned by Snapshot
+// @return one nanosecond value per input sample, empty when input is empty
+inline std::vector<double> ToNs(const std::vector<Cycles>& samples) {
+  Manager& mgr = Manager::Get();
+  mgr.EnsureCalibrated();
+  std::vector<double> out;
+  out.reserve(samples.size());
+  for (Cycles c : samples) out.push_back((double)c / mgr.cycles_per_ns);
+  return out;
+}
+
+// Owning result of Snapshot: read-only std::vector surface plus time
+// translation, so existing call sites keep compiling unchanged.
+class SnapshotResult {
+ public:
+  SnapshotResult() = default;
+  explicit SnapshotResult(std::vector<Cycles> samples)
+      : samples_(std::move(samples)) {}
+
+  // Same conversion as Latte::ToNs, one double per sample.
+  std::vector<double> to_ns() const { return ToNs(samples_); }
+
+  operator const std::vector<Cycles>&() const { return samples_; }
+  bool empty() const { return samples_.empty(); }
+  size_t size() const { return samples_.size(); }
+  Cycles operator[](size_t i) const { return samples_[i]; }
+  auto begin() const { return samples_.begin(); }
+  auto end() const { return samples_.end(); }
+
+ private:
+  std::vector<Cycles> samples_;
+};
+
+inline SnapshotResult Snapshot(ID id) {
+  return SnapshotResult(Manager::Get().ExtractRaw(id));
 }
 
 
@@ -978,7 +1036,7 @@ inline void DumpToJson(const std::string& path) {
 
   #define LATTE_FIELD(expr)                                             \
     ::Latte::Internal::TimedEval<::Latte::Fast::Start, ::Latte::Fast::Stop>( \
-        __func__, [&]() -> decltype(auto) { return (expr); })
+        #expr, [&]() -> decltype(auto) { return (expr); })
 
 
 #else  // LATTE_DISABLE defined
@@ -1044,7 +1102,18 @@ struct ScopeGuard {
   explicit ScopeGuard(ID) noexcept {}
 };
 
-inline std::vector<Cycles> Snapshot(ID) { return {}; }
+// No-op result type so Snapshot(id).to_ns() compiles in disabled builds.
+struct SnapshotResult {
+  SnapshotResult() = default;
+  std::vector<double> to_ns() const { return {}; }
+  bool empty() const { return true; }
+  size_t size() const { return 0; }
+  const Cycles* begin() const { return nullptr; }
+  const Cycles* end() const { return nullptr; }
+};
+
+inline SnapshotResult Snapshot(ID) { return {}; }
+inline std::vector<double> ToNs(const std::vector<Cycles>&) { return {}; }
 inline std::string FormatTime(double) { return ""; }
 inline Internal::CleanResult DataClean(const std::vector<double>&) {
   return {};

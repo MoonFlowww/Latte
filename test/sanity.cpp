@@ -68,6 +68,27 @@ int main() {
 
   LATTE_CALIBRATE();
 
+  // ToNs must translate the whole snapshot through the backend-calibrated
+  // frequency: one double per sample, positive, monotonic in the input.
+  {
+    auto ns_samples = Latte::ToNs(samples);
+    CHECK(ns_samples.size() == samples.size());
+    for (double v : ns_samples) CHECK(v > 0.0);
+
+    std::vector<Latte::Cycles> probe = {1, 2, 3};
+    auto probe_ns = Latte::ToNs(probe);
+    CHECK(probe_ns.size() == 3);
+    CHECK(probe_ns[0] > 0.0);
+    CHECK(probe_ns[1] > probe_ns[0]);
+    CHECK(probe_ns[2] > probe_ns[1]);
+    CHECK(Latte::ToNs({}).empty());
+
+    // Fluent form must agree with the free function.
+    auto ns_method = Latte::Snapshot("sanity_component").to_ns();
+    CHECK(ns_method.size() == samples.size());
+    CHECK(ns_method == ns_samples);
+  }
+
   // DumpToStream must not throw/crash on both raw and calibrated views.
   std::ostringstream oss;
   Latte::DumpToStream(oss, Latte::Parameter::Time, Latte::Parameter::Raw);
@@ -239,13 +260,22 @@ int main() {
   }
 
   // LATTE_FIELD must run expr, return its value, and record a sample under
-  // __func__ ("main" here) - not the stringified expr text.
+  // the wrapped call's name ("add"), not the caller's function name. IDs are
+  // keyed by address, so the FieldId buffer cannot be looked up with a string
+  // literal; count by content instead.
   {
     auto add = [](int a, int b) { return a + b; };
-    auto before = Latte::Manager::Get().ExtractSamplesGlobal()["main"].size();
+    auto count_add = [&]() -> size_t {
+      size_t n = 0;
+      for (auto& [id, vec] : Latte::Manager::Get().ExtractSamplesGlobal()) {
+        if (id != nullptr && std::string(id) == "add") n += vec.size();
+      }
+      return n;
+    };
+    size_t before = count_add();
     int out = LATTE_FIELD(add(19, 23));
     CHECK(out == 42);
-    auto after = Latte::Manager::Get().ExtractSamplesGlobal()["main"].size();
+    size_t after = count_add();
     CHECK(after == before + 1);
   }
 
@@ -287,6 +317,8 @@ int main() {
   CHECK(LATTE_FIELD(1 + 1) == 2);
 
   CHECK(Latte::Snapshot("x").empty());
+  CHECK(Latte::Snapshot("x").to_ns().empty());
+  CHECK(Latte::ToNs({1, 2}).empty());
   CHECK(Latte::FormatTime(123.0).empty());
   CHECK(Latte::DataClean({1.0, 2.0, 3.0}).values.empty());
 
