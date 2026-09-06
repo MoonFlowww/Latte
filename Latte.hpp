@@ -114,6 +114,8 @@ struct Intrinsic {
   }  // stop
 };
 
+
+
 enum class Mode : uint8_t { Fast = 0, Mid = 1, Hard = 2 };
 
 namespace Internal {
@@ -130,6 +132,8 @@ __attribute__((always_inline)) static inline uint8_t CalibKey(
              : CALIB_KEY_UNSET;
 }
 
+
+
 __attribute__((always_inline)) static inline void LFENCE() {
   #if defined(_MSC_VER)
   _mm_lfence();
@@ -138,7 +142,10 @@ __attribute__((always_inline)) static inline void LFENCE() {
   #endif
 }
 
-// Calibration labels (single address across TUs)
+
+
+// Calibration labels
+// TODO: find an elegant replacement
 inline constexpr char CALIB_FxF[] = "FxF";
 inline constexpr char CALIB_FxM[] = "FxM";
 inline constexpr char CALIB_FxH[] = "FxH";
@@ -152,9 +159,11 @@ inline constexpr char CALIB_PULSE[] = "PxP";
 
 struct CleanResult {
   std::vector<double> values;  // sorted
-  size_t outlier = 0;          // BUMED cleaning
+  size_t outlier = 0;          // BUMED cleaned
   double cutoff = std::numeric_limits<double>::max();
 };
+
+
 
 inline CleanResult CleanData(const std::vector<double>& values) {
   CleanResult out;
@@ -193,7 +202,7 @@ inline CleanResult CleanData(const std::vector<double>& values) {
         (*std::max_element(bucket_maxes.begin(), bucket_maxes.end())) * 1.5;
   }
 
-  //Filter outlier via BUMED
+  //BUMED filter
   out.values.reserve(values.size());
   for (double v : values) {
     if (v > cutoff)
@@ -212,12 +221,16 @@ inline CleanResult CleanData(const std::vector<double>& values) {
   return out;
 }
 
+
+
 inline double MedianFromSorted(const std::vector<double>& sorted) {
   if (sorted.empty()) return 0.0;
   const size_t n = sorted.size();
   return (n % 2 == 0) ? (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
                       : sorted[n / 2];
 }
+
+
 
 inline uint64_t CurrentThreadId() {
   #if defined(__linux__)
@@ -235,7 +248,9 @@ inline uint64_t CurrentThreadId() {
   #endif
 }
 
-// OS process id, used as the pid field in DumpToJson (Chrome Trace)
+
+
+// OS id of process for DumpToJson
 inline uint32_t CurrentProcessId() {
   #if defined(_MSC_VER)
   return static_cast<uint32_t>(::GetCurrentProcessId());
@@ -243,10 +258,16 @@ inline uint32_t CurrentProcessId() {
   return static_cast<uint32_t>(::getpid());
   #endif
 }
+
+
+
 }  // namespace Internal
 
+
+
 struct alignas(64) RingBuffer {
-  Cycles data[MAX_SAMPLES];  // duration
+  //durations
+  Cycles duration[MAX_SAMPLES];
   Cycles start
       [MAX_SAMPLES];  // raw start timestamp (cycles, comparable via Manager::epoch)
   uint8_t depth
@@ -256,10 +277,7 @@ struct alignas(64) RingBuffer {
   // 0xFF: unset/unknown, 0xFE: mixed
   uint8_t calib_key = 0xFF;
 
-  RingBuffer() {
-    std::memset(data, 0, sizeof(data));
-    // start[]/depth[] don't need zero-init: only ever read at indices where data[i] > 0.
-  }
+  RingBuffer() { std::memset(duration, 0, sizeof(duration)); }
 
   __attribute__((always_inline)) inline void push(
       Cycles val, Cycles start_val, uint8_t depth_val, uint8_t key
@@ -269,39 +287,45 @@ struct alignas(64) RingBuffer {
     else if (calib_key != key)
       calib_key = 0xFE;
 
-    data[head] = val;
+    duration[head] = val;
     start[head] = start_val;
     depth[head] = depth_val;
-    head = (head + 1) & BUFFER_MASK;  // wrapping
+    head = (head + 1) & BUFFER_MASK;
   }
 };
+
+
 
 struct ThreadStorage {
   ID stack_ids[MAX_ACTIVE_SLOTS];
   Cycles stack_starts[MAX_ACTIVE_SLOTS];
   uint8_t stack_modes[MAX_ACTIVE_SLOTS];  // Latte::Mode encoded
   size_t stack_ptr = 0;
-  uint64_t tid = 0;  // OS thread id, captured once when this storage is created
+  uint64_t tid = 0;  // OS thread id, captured at storage creation
 
-  // pointer comparison
+  // for pointer comparisor
   std::map<ID, RingBuffer> history;
   __attribute__((always_inline)) inline RingBuffer* GetOrAdd(ID id) {
     return &history[id];
   }
 };
 
+
+
 struct Sample {
   Cycles duration;
-  Cycles start;  // raw cycles, relative to Manager::epoch (see DumpToJson)
+  Cycles start;  // for DumpToJson
   uint8_t depth;
 };
+
+
 
 class Manager {
  public:
   std::mutex mutex;
-  std::vector<ThreadStorage*> thread_buffers;
+  std::vector<ThreadStorage*> Threads;
 
-  double cycles_per_ns = 1.0;  //means unknown
+  double cycles_per_ns = 1.0;  //1: undefined
   Cycles epoch = Intrinsic::RDTSC();
 
   static Manager& Get() {
@@ -321,49 +345,45 @@ class Manager {
     return calib_offsets[key];
   }
 
-  void Register(ThreadStorage* ts) {
+  void Register(ThreadStorage* thread) {
     std::lock_guard<std::mutex> lock(mutex);
-    thread_buffers.push_back(ts);
+    Threads.push_back(thread);
   }
 
-  // Non-blocking Data Extraction
-  // Returns all valid samples collected so far for a specific ID
   std::vector<Cycles> ExtractRaw(ID id) {
     std::vector<Cycles> output;
     output.reserve(1024);
 
-    std::lock_guard<std::mutex> lock(mutex);
-    for (auto* ts : thread_buffers) {
-      auto it = ts->history.find(id);
-      if (it == ts->history.end()) continue;
-      RingBuffer& rb = it->second;
+    std::lock_guard<std::mutex> lock(mutex);  // non blocking
+    for (auto* thread : Threads) {            // over threadS
+      auto it = thread->history.find(id);
+      if (it == thread->history.end()) continue;
 
-      for (size_t i = 0; i < MAX_SAMPLES; ++i) {
-        Cycles v = rb.data[i];
-        if (v > 0) output.push_back(v);
+      for (auto& x : it->second.duration) {  //second is RingBuffer
+        if (x > 0) output.push_back(x);
       }
     }
     return output;
   }
 
   std::map<ID, std::vector<Sample>> ExtractSamplesGlobal() {
-    std::map<ID, std::vector<Sample>> global_data;
+    std::map<ID, std::vector<Sample>> global_buffer;
     std::lock_guard<std::mutex> lock(mutex);
 
-    for (auto* ts : thread_buffers) {
-      for (auto& [id, buffer] : ts->history) {
-        std::vector<Sample>& vec = global_data[id];
+    for (auto* thread : Threads) {
+      for (auto& [id, ring] : thread->history) {
+        std::vector<Sample>& buf_ = global_buffer[id];
 
         for (size_t i = 0; i < MAX_SAMPLES; ++i) {
-          if (buffer.data[i] > 0)
-            vec.push_back({buffer.data[i], buffer.start[i], buffer.depth[i]});
+          if (ring.duration[i] > 0)
+            buf_.push_back({ring.duration[i], ring.start[i], ring.depth[i]});
         }
       }
     }
-    return global_data;
+    return global_buffer;
   }
 
-  void Calibrate();  //scroll down
+  void Calibrate();  //ctor bellow
 
  private:
   std::once_flag calibrate_once;
@@ -371,68 +391,93 @@ class Manager {
   std::array<bool, Internal::CALIB_KEY_COUNT> calib_valid{};
 };
 
+
+
 inline ThreadStorage* GetThreadStorage() {
-  static thread_local ThreadStorage* ts = nullptr;
-  if (__builtin_expect(!ts, 0)) {
-    ts = new ThreadStorage();
-    ts->tid = Internal::CurrentThreadId();
-    Manager::Get().Register(ts);
+  static thread_local ThreadStorage* thread = nullptr;
+  if (__builtin_expect(!thread, 0)) {
+    thread = new ThreadStorage();
+    thread->tid = Internal::CurrentThreadId();
+    Manager::Get().Register(thread);
   }
-  return ts;
+  return thread;
 }
+
+
 
 namespace Internal {
 inline RingBuffer* GetBuffer(ID id) { return GetThreadStorage()->GetOrAdd(id); }
+
+
+
 }  // namespace Internal
+
+
 
 template <Mode M, Cycles (*TimeFunc)()>
 struct Recorder {
   __attribute__((always_inline)) static inline void Start(ID id) {
-    ThreadStorage* ts = GetThreadStorage();
-    if (__builtin_expect(ts->stack_ptr < MAX_ACTIVE_SLOTS, 1)) {
-      ts->stack_starts[ts->stack_ptr] = TimeFunc();
-      ts->stack_ids[ts->stack_ptr] = id;
-      ts->stack_modes[ts->stack_ptr] = static_cast<uint8_t>(M);
-      ts->stack_ptr++;
+    ThreadStorage* thread = GetThreadStorage();
+    if (__builtin_expect(thread->stack_ptr < MAX_ACTIVE_SLOTS, 1)) {
+      thread->stack_starts[thread->stack_ptr] = TimeFunc();
+      thread->stack_ids[thread->stack_ptr] = id;
+      thread->stack_modes[thread->stack_ptr] = static_cast<uint8_t>(M);
+      thread->stack_ptr++;
     }
   }
 
   __attribute__((always_inline)) static inline Cycles Stop(ID /*id*/) {
     Cycles end = TimeFunc();
-    ThreadStorage* ts = GetThreadStorage();
+    ThreadStorage* thread = GetThreadStorage();
 
-    if (__builtin_expect(ts->stack_ptr > 0, 1)) {
-      ts->stack_ptr--;
-      const Cycles start_cycles = ts->stack_starts[ts->stack_ptr];
-      Cycles delta = end - start_cycles;  // raw latency
-      const uint8_t depth = static_cast<uint8_t>(ts->stack_ptr);
-      const uint8_t start_mode = ts->stack_modes[ts->stack_ptr];
+    if (__builtin_expect(thread->stack_ptr > 0, 1)) {
+      thread->stack_ptr--;
+
+      const Cycles start_cycles = thread->stack_starts[thread->stack_ptr];
+      Cycles elapsed = end - start_cycles;  // raw latency
+
+      const uint8_t depth = static_cast<uint8_t>(thread->stack_ptr);
+      const uint8_t start_mode = thread->stack_modes[thread->stack_ptr];
       const uint8_t stop_mode = static_cast<uint8_t>(M);
       const uint8_t key = Internal::CalibKey(start_mode, stop_mode);
-      ts->history[ts->stack_ids[ts->stack_ptr]].push(
-          delta, start_cycles, depth, key
+
+      thread->history[thread->stack_ids[thread->stack_ptr]].push(
+          elapsed, start_cycles, depth, key
       );
-      return delta;
+      return elapsed;
     }
     return 0;
   }
 };
+
+
+
 namespace Fast {
 inline void Start(ID id) { Recorder<Mode::Fast, Intrinsic::RDTSC>::Start(id); }
 inline void Stop(ID id) { Recorder<Mode::Fast, Intrinsic::RDTSC>::Stop(id); }
 }  // namespace Fast
+
+
+
 namespace Mid {
 inline void Start(ID id) { Recorder<Mode::Mid, Intrinsic::RDTSCP>::Start(id); }
 inline void Stop(ID id) { Recorder<Mode::Mid, Intrinsic::RDTSCP>::Stop(id); }
 }  // namespace Mid
+
+
+
 namespace Hard {
 inline void Start(ID id) {
   Recorder<Mode::Hard, Intrinsic::LFENCE_RDTSCP>::Start(id);
 }
+
+
+
 inline void Stop(ID id) {
   Recorder<Mode::Hard, Intrinsic::RDTSCP_LFENCE>::Stop(id);
 }
 }  // namespace Hard
+
 
 
 struct ModeAPI {
@@ -441,13 +486,17 @@ struct ModeAPI {
   const char* name;
 };
 
+
+
 inline constexpr ModeAPI MODE_TABLE[3] = {
     {Fast::Start, Fast::Stop, "Fast"},
     {Mid::Start, Mid::Stop, "Mid"},
     {Hard::Start, Hard::Stop, "Hard"}
 };
 
-// Nesting order: C++ destruction is LIFO, matching Recorder::Stop.
+
+
+// FIFO
 template <void (*StartF)(ID), void (*StopF)(ID)>
 struct ScopeGuard {
   ID id_;
@@ -459,39 +508,43 @@ struct ScopeGuard {
   ScopeGuard& operator=(const ScopeGuard&) = delete;
 };
 
-namespace Internal {
-  template <class F>
-  struct FieldId {
-    static const char* Get(const char* expr) {
-      static char buf[128];
-      size_t n = 0;
-      const char* p = expr;
-      while (*p == ' ' || *p == '\t') ++p;
-      while (*p && *p != '(' && n + 1 < sizeof(buf)) buf[n++] = *p++;
-      while (n > 0 && (buf[n - 1] == ' ' || buf[n - 1] == '\t')) --n;
-      buf[n] = '\0';
-      return buf;
-    }
-  };
 
-  template <void (*StartF)(ID), void (*StopF)(ID), class F>
-  __attribute__((always_inline)) inline decltype(auto) TimedEval(
-      const char* expr, F&& f
-  ) {
-    static const char* id = FieldId<F>::Get(expr);
-    ScopeGuard<StartF, StopF> _g(id);
-    return static_cast<F&&>(f)();
+
+namespace Internal {
+template <class F>
+struct FieldId {
+  static const char* Get(const char* expr) {
+    static char buf[128];
+    size_t n = 0;
+    const char* p = expr;
+    while (*p == ' ' || *p == '\t') ++p;
+    while (*p && *p != '(' && n + 1 < sizeof(buf)) buf[n++] = *p++;
+    while (n > 0 && (buf[n - 1] == ' ' || buf[n - 1] == '\t')) --n;
+    buf[n] = '\0';
+    return buf;
   }
+};
+
+
+
+template <void (*StartF)(ID), void (*StopF)(ID), class F>
+__attribute__((always_inline)) inline decltype(auto) TimedEval(
+    const char* expr, F&& f
+) {
+  static const char* id = FieldId<F>::Get(expr);
+  ScopeGuard<StartF, StopF> _g(id);
+  return static_cast<F&&>(f)();
 }
+}  // namespace Internal
+
+
 
 inline void Manager::Calibrate() {
   {
     LATTE_FREQ(cycles_per_ns);
   }
-  // PERMUTATION SELF-OFFSET
-  constexpr int WARMUP_ITERS = 10000;  // naturally overwrite by circular buffer
+  constexpr int WARMUP_ITERS = 10000;  //naturally overwritten (ring)
   const int iters = (int)MAX_SAMPLES + WARMUP_ITERS;
-
 
   (void)GetThreadStorage();  // Force TLS init before sampling
 
@@ -520,12 +573,12 @@ inline void Manager::Calibrate() {
   for (volatile int i = 0; i < iters; ++i) {
     Internal::LFENCE();
     Latte::Fast::Start(Internal::CALIB_PULSE);
-    LATTE_PULSE("xxxx");
+    LATTE_PULSE("InternalCalibPulse");
     Latte::Mid::Stop(Internal::CALIB_PULSE);
     Internal::LFENCE();
   }
 
-  auto BUMED = [&](ID id) -> Cycles {  // Median(Min(Bucket[1'000] ))
+  auto BUMED = [&](ID id) -> Cycles {  // Median(Min(Bucket[1'000] )): BUMED
     std::vector<Cycles> raw = ExtractRaw(id);
     if (raw.empty()) return 0;
 
@@ -588,21 +641,22 @@ inline void Manager::Calibrate() {
     calib_valid[i] = true;
   }
 
-  // Remove calibration telemetry
-  if (ThreadStorage* ts = GetThreadStorage()) {
-    ts->history.erase(Internal::CALIB_FxF);
-    ts->history.erase(Internal::CALIB_FxM);
-    ts->history.erase(Internal::CALIB_FxH);
-    ts->history.erase(Internal::CALIB_MxF);
-    ts->history.erase(Internal::CALIB_MxM);
-    ts->history.erase(Internal::CALIB_MxH);
-    ts->history.erase(Internal::CALIB_HxF);
-    ts->history.erase(Internal::CALIB_HxM);
-    ts->history.erase(Internal::CALIB_HxH);
-    ts->history.erase(Internal::CALIB_PULSE);
-    ts->history.erase("xxxx");
+  // cleanup calibration
+  if (ThreadStorage* thread = GetThreadStorage()) {
+    thread->history.erase(Internal::CALIB_FxF);
+    thread->history.erase(Internal::CALIB_FxM);
+    thread->history.erase(Internal::CALIB_FxH);
+    thread->history.erase(Internal::CALIB_MxF);
+    thread->history.erase(Internal::CALIB_MxM);
+    thread->history.erase(Internal::CALIB_MxH);
+    thread->history.erase(Internal::CALIB_HxF);
+    thread->history.erase(Internal::CALIB_HxM);
+    thread->history.erase(Internal::CALIB_HxH);
+    thread->history.erase(Internal::CALIB_PULSE);
+    thread->history.erase("InternalCalibPulse");
   }
 }
+
 
 inline std::vector<double> ToNs(const std::vector<Cycles>& samples) {
   Manager& mgr = Manager::Get();
@@ -632,6 +686,7 @@ class SnapshotResult {
   std::vector<Cycles> samples_;
 };
 
+
 inline SnapshotResult Snapshot(ID id) {
   return SnapshotResult(Manager::Get().ExtractRaw(id));
 }
@@ -654,14 +709,18 @@ inline std::string FormatTime(double ns) {
   return ss.str();
 }
 
+
+
 namespace Parameter {
 enum Unit { Cycle, Time };
 enum Data { Raw, Calibrated };
 }  // namespace Parameter
 
+
 inline Internal::CleanResult DataClean(const std::vector<double>& values) {
   return Internal::CleanData(values);
 }
+
 
 inline void DumpToStream(
     std::ostream& oss,
@@ -678,21 +737,21 @@ inline void DumpToStream(
     uint8_t calib_key = Internal::CALIB_KEY_UNSET;
   };
 
-  std::map<ID, Series> global_data;
+  std::map<ID, Series> global_buffer;
 
-  {  // Thread-safe data collection
+  {  // TODO: modernize thread safety (at least fast extraction)
     std::lock_guard<std::mutex> lock(mgr.mutex);
-    for (auto* ts : mgr.thread_buffers) {
-      for (auto& [id, buffer] : ts->history) {
-        Series& s = global_data[id];
+    for (auto* thread : mgr.Threads) {
+      for (auto& [id, ring] : thread->history) {
+        Series& buf_ = global_buffer[id];
 
-        if (s.calib_key == Internal::CALIB_KEY_UNSET)
-          s.calib_key = buffer.calib_key;
-        else if (s.calib_key != buffer.calib_key)
-          s.calib_key = Internal::CALIB_KEY_MIXED;
+        if (buf_.calib_key == Internal::CALIB_KEY_UNSET)
+          buf_.calib_key = ring.calib_key;
+        else if (buf_.calib_key != ring.calib_key)
+          buf_.calib_key = Internal::CALIB_KEY_MIXED;
 
-        for (size_t i = 0; i < MAX_SAMPLES; ++i) {
-          if (buffer.data[i] > 0) s.values.push_back((double)buffer.data[i]);
+        for (auto& elapsed_time : ring.duration) {
+          if (elapsed_time > 0) buf_.values.push_back((double)elapsed_time);
         }
       }
     }
@@ -770,7 +829,7 @@ inline void DumpToStream(
   oss << gray("#") << gray(d_line) << gray("#") << "\n";
 
 
-  // Removing self-offset measured by your Latte-calls themself
+  // removed self-measured overhead
   if (data_mode == Parameter::Calibrated) {
     auto off_str = [&](uint8_t sm, uint8_t em) -> std::string {
       const uint8_t k = Internal::CalibKey(sm, em);
@@ -835,9 +894,8 @@ inline void DumpToStream(
   );
 
   oss << gray("|") << gray(line) << gray("|") << "\n";
-  for (auto& [id, series] : global_data) {
+  for (auto& [id, series] : global_buffer) {
     if (series.values.empty()) continue;
-
 
     std::vector<double> adjusted;  // noise filtering
     adjusted.reserve(series.values.size());
@@ -901,12 +959,11 @@ inline void DumpToStream(
 }
 
 
+
 inline void DumpToJson(const std::string& path) {
   Manager& mgr = Manager::Get();
   mgr.EnsureCalibrated();
 
-  // Snapshot each (thread, id) ring in chronological order: pmu is monotonic per thread,
-  // so reading from top yields sorted
   struct Track {
     ID id;
     uint64_t tid;
@@ -915,16 +972,23 @@ inline void DumpToJson(const std::string& path) {
   std::vector<Track> tracks;
   {
     std::lock_guard<std::mutex> lock(mgr.mutex);
-    for (auto* ts : mgr.thread_buffers) {
-      for (auto& [id, rb] : ts->history) {
-        Track t{id, ts->tid, {}};
-        t.samples.reserve(MAX_SAMPLES);
+    for (auto* thread : mgr.Threads) {
+      for (auto& [id, ring] : thread->history) {
+        Track track{id, thread->tid, {}};
+        track.samples.reserve(MAX_SAMPLES);
+
         for (size_t k = 0; k < MAX_SAMPLES; ++k) {
-          const size_t i = (rb.head + k) & BUFFER_MASK;
-          if (rb.data[i] > 0)
-            t.samples.push_back({rb.data[i], rb.start[i], rb.depth[i]});
+          const size_t i = (ring.head + k) & BUFFER_MASK;
+
+          if (ring.duration[i] > 0) {
+            track.samples.push_back(
+                {ring.duration[i], ring.start[i], ring.depth[i]}
+            );
+          }
         }
-        if (!t.samples.empty()) tracks.push_back(std::move(t));
+        if (!track.samples.empty()) {
+          tracks.push_back(std::move(track));
+        }
       }
     }
   }
@@ -932,7 +996,7 @@ inline void DumpToJson(const std::string& path) {
   size_t total = 0;
   for (auto& t : tracks) total += t.samples.size();
 
-  // K-way merge of sorted tracks by start time: O(N log k), k = #tracks.
+  // K-way merge of sorted tracks by start time: O(N log k), k = #tracks
   struct Cursor {
     Cycles start;
     uint32_t track;
@@ -993,6 +1057,7 @@ inline void DumpToJson(const std::string& path) {
 }  // namespace Latte
 
 
+
   #define LATTE_CALIBRATE()                     \
     do {                                        \
       Latte::Manager::Get().EnsureCalibrated(); \
@@ -1009,22 +1074,21 @@ inline void DumpToJson(const std::string& path) {
   #define LATTE_RAII_TAG__Mid Mid
   #define LATTE_RAII_TAG__Hard Hard
 
-  // id = __func__
-  // In a lambda that's the closure's operator, not the enclosing func
-  #define LATTE_RAII(mode)                       \
-    ::Latte::ScopeGuard<                         \
-        ::Latte::LATTE_RAII_TAG(mode)::Start,    \
-        ::Latte::LATTE_RAII_TAG(mode)::Stop>     \
-    LATTE_CONCAT(_latte_raii_, __LINE__) {       \
-      __func__                                   \
+  #define LATTE_RAII(mode)                    \
+    ::Latte::ScopeGuard<                      \
+        ::Latte::LATTE_RAII_TAG(mode)::Start, \
+        ::Latte::LATTE_RAII_TAG(mode)::Stop>  \
+    LATTE_CONCAT(_latte_raii_, __LINE__) {    \
+      __func__                                \
     }
 
-  #define LATTE_FIELD(expr)                                             \
+  #define LATTE_FIELD(expr)                                                  \
     ::Latte::Internal::TimedEval<::Latte::Fast::Start, ::Latte::Fast::Stop>( \
-        #expr, [&]() -> decltype(auto) { return (expr); })
+        #expr, [&]() -> decltype(auto) { return (expr); }                    \
+    )  //transfer output
 
 
-#else  // LATTE_DISABLE defined
+#else  // DEFINED(LATTE_DISABLE)
   #include <cstdint>
   #include <ostream>
   #include <string>
@@ -1034,23 +1098,19 @@ inline void DumpToJson(const std::string& path) {
     do {                      \
     } while (0)
 
-
   #define LATTE_FREQ(cycles_per_ns) \
     do {                            \
     } while (0)
 
-
   #define LATTE_CALIBRATE() \
     do {                    \
     } while (0)
-
 
   #define LATTE_RAII(mode) \
     do {                   \
     } while (0)  // statement position only
 
   #define LATTE_FIELD(expr) (expr)
-
 
 namespace Latte {
 using ID = const char*;
@@ -1060,10 +1120,12 @@ namespace Fast {
 inline void Start(ID) {}
 inline void Stop(ID) {}
 }  // namespace Fast
+
 namespace Mid {
 inline void Start(ID) {}
 inline void Stop(ID) {}
 }  // namespace Mid
+
 namespace Hard {
 inline void Start(ID) {}
 inline void Stop(ID) {}
@@ -1074,6 +1136,8 @@ enum Unit { Cycle, Time };
 enum Data { Raw, Calibrated };
 }  // namespace Parameter
 
+
+
 namespace Internal {
 struct CleanResult {
   std::vector<double> values;
@@ -1082,12 +1146,12 @@ struct CleanResult {
 };
 }  // namespace Internal
 
+
 template <void (*)(ID), void (*)(ID)>
 struct ScopeGuard {
   explicit ScopeGuard(ID) noexcept {}
 };
 
-// No-op result type so Snapshot(id).to_ns() compiles in disabled builds.
 struct SnapshotResult {
   SnapshotResult() = default;
   std::vector<double> to_ns() const { return {}; }
@@ -1100,16 +1164,19 @@ struct SnapshotResult {
 inline SnapshotResult Snapshot(ID) { return {}; }
 inline std::vector<double> ToNs(const std::vector<Cycles>&) { return {}; }
 inline std::string FormatTime(double) { return ""; }
+
 inline Internal::CleanResult DataClean(const std::vector<double>&) {
   return {};
 }
+
 inline void DumpToStream(
     std::ostream&,
     Parameter::Unit = Parameter::Cycle,
     Parameter::Data = Parameter::Raw
 ) {}
-inline void DumpToJson(const std::string& path) { (void)path; }
-}  // namespace Latte
 
+inline void DumpToJson(const std::string& path) { (void)path; }
+
+}  // namespace Latte
 
 #endif  // LATTE_DISABLE
