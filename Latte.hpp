@@ -219,8 +219,6 @@ inline double MedianFromSorted(const std::vector<double>& sorted) {
                       : sorted[n / 2];
 }
 
-// OS thread id: real kernel tid where available, stable per thread for the
-// life of the recording. Used to tag every sample in DumpToJson.
 inline uint64_t CurrentThreadId() {
   #if defined(__linux__)
   return static_cast<uint64_t>(::syscall(SYS_gettid));
@@ -237,7 +235,7 @@ inline uint64_t CurrentThreadId() {
   #endif
 }
 
-// OS process id, used as the pid field in DumpToJson (Chrome Trace format).
+// OS process id, used as the pid field in DumpToJson (Chrome Trace)
 inline uint32_t CurrentProcessId() {
   #if defined(_MSC_VER)
   return static_cast<uint32_t>(::GetCurrentProcessId());
@@ -462,13 +460,8 @@ struct ScopeGuard {
 };
 
 namespace Internal {
-  // Latte IDs are keyed by address, so each LATTE_FIELD expansion needs its
-  // own stable buffer. The closure type of the per-expansion lambda makes the
-  // static storage unique per call site.
   template <class F>
   struct FieldId {
-    // Parse the stringized call: keep everything up to the first '(' (or the
-    // whole trimmed expression when there is none), capped at 128 chars.
     static const char* Get(const char* expr) {
       static char buf[128];
       size_t n = 0;
@@ -611,11 +604,6 @@ inline void Manager::Calibrate() {
   }
 }
 
-// Translate raw TSC durations to nanoseconds through the calibrated CPU
-// frequency. Calibrates once, lazily, on first use (about 120 ms); the cached
-// factor is the same one DumpToStream and DumpToJson use internally.
-// @param samples raw durations as returned by Snapshot
-// @return one nanosecond value per input sample, empty when input is empty
 inline std::vector<double> ToNs(const std::vector<Cycles>& samples) {
   Manager& mgr = Manager::Get();
   mgr.EnsureCalibrated();
@@ -625,15 +613,12 @@ inline std::vector<double> ToNs(const std::vector<Cycles>& samples) {
   return out;
 }
 
-// Owning result of Snapshot: read-only std::vector surface plus time
-// translation, so existing call sites keep compiling unchanged.
 class SnapshotResult {
  public:
   SnapshotResult() = default;
   explicit SnapshotResult(std::vector<Cycles> samples)
       : samples_(std::move(samples)) {}
 
-  // Same conversion as Latte::ToNs, one double per sample.
   std::vector<double> to_ns() const { return ToNs(samples_); }
 
   operator const std::vector<Cycles>&() const { return samples_; }
@@ -785,7 +770,7 @@ inline void DumpToStream(
   oss << gray("#") << gray(d_line) << gray("#") << "\n";
 
 
-  // Removing self-offset measured by your Latte-calls themself (noise)
+  // Removing self-offset measured by your Latte-calls themself
   if (data_mode == Parameter::Calibrated) {
     auto off_str = [&](uint8_t sm, uint8_t em) -> std::string {
       const uint8_t k = Internal::CalibKey(sm, em);
