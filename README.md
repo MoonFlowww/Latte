@@ -265,4 +265,4 @@ Measurement error vs a 4µs workload:
 
 ## Licensing
 
-MIT License, Copyright (c) 2026 MoonFlowww. See `LICENSE`.
+Public Domain.
